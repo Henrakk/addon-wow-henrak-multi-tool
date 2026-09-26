@@ -31,3 +31,19 @@ PaladinCaernSidhe/
 - Displays a short remaining-time counter when an aura has an expiration time.
 - Settings are available in the game's AddOns settings.
 - /pcs opens settings; /pcs lock, /pcs unlock, /pcs reset manage the frame.
+
+## CurseForge publishing
+
+The GitHub Actions workflow packages and uploads the addon to CurseForge when a version tag is pushed (for example, `v0.1.1`).
+
+Configure these values in the GitHub repository under **Settings > Secrets and variables > Actions**:
+
+- Add the CurseForge project ID as a repository variable named `CURSEFORGE_PROJECT_ID`.
+- Add a CurseForge API token as a repository secret named `CF_API_TOKEN`.
+
+Create a tag for the version and push it to GitHub to publish:
+
+```sh
+git tag -a v0.1.1 -m "v0.1.1"
+git push origin v0.1.1
+```
