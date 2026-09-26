@@ -1,4 +1,5 @@
 ## Interface: 11509
+## Interface-Forever: 16001
 ## Title: HenrakMultiTool
 ## Notes: Multi-class self-buff tracker for WoW Forever
 ## Author: Henrak

@@ -34,7 +34,7 @@ PaladinCaernSidhe/
 
 ## CurseForge publishing
 
-The GitHub Actions workflow packages and uploads the addon to CurseForge when a version tag is pushed (for example, `v1.0.1`). CurseForge compatibility is explicitly set to WoW Forever `1.60.1`; the TOC interface number remains the separate client API version.
+The GitHub Actions workflow packages and uploads the addon to CurseForge when a version tag is pushed (for example, `v1.0.1`). `Interface-Forever: 16001` marks WoW Forever `1.60.1` compatibility; the base `Interface: 11509` remains the separate client API version.
 
 Configure these values in the GitHub repository under **Settings > Secrets and variables > Actions**:
 
