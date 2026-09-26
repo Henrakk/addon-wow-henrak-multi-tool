@@ -1,6 +1,6 @@
 # PaladinCaernSidhe — WoW Forever
 
-Version 1.0.0
+Version 1.0.1
 
 ## Structure
 
@@ -34,7 +34,7 @@ PaladinCaernSidhe/
 
 ## CurseForge publishing
 
-The GitHub Actions workflow packages and uploads the addon to CurseForge when a version tag is pushed (for example, `v0.1.1`).
+The GitHub Actions workflow packages and uploads the addon to CurseForge when a version tag is pushed (for example, `v1.0.1`). CurseForge compatibility is explicitly set to WoW Forever `1.60.1`; the TOC interface number remains the separate client API version.
 
 Configure these values in the GitHub repository under **Settings > Secrets and variables > Actions**:
 
@@ -44,6 +44,6 @@ Configure these values in the GitHub repository under **Settings > Secrets and v
 Create a tag for the version and push it to GitHub to publish:
 
 ```sh
-git tag -a v0.1.1 -m "v0.1.1"
-git push origin v0.1.1
+git tag -a v1.0.1 -m "v1.0.1"
+git push origin v1.0.1
 ```
