@@ -27,6 +27,33 @@ local function UpdateManaBar()
     NS.ManaFrame:Show()
 end
 
+local function UpdateBagSlots()
+    local button = NS.BagSlotsButton
+    if not button or not NS.GetDB then return end
+    local db = NS.GetDB()
+    if not db or not db.enabled or db.showBagSlots == false then
+        button:Hide()
+        return
+    end
+
+    local container = C_Container
+    local getNumSlots = container and container.GetContainerNumSlots or GetContainerNumSlots
+    local getNumFreeSlots = container and container.GetContainerNumFreeSlots or GetContainerNumFreeSlots
+    if not getNumSlots or not getNumFreeSlots then return end
+
+    local totalSlots = 0
+    local freeSlots = 0
+    for bag = 0, NUM_BAG_SLOTS or 4 do
+        totalSlots = totalSlots + (getNumSlots(bag) or 0)
+        freeSlots = freeSlots + (getNumFreeSlots(bag) or 0)
+    end
+
+    button:SetText(string.format(NS.L.BAG_SLOTS_BUTTON or "%d free slots", freeSlots))
+    button:Show()
+    button.freeSlots = freeSlots
+    button.totalSlots = totalSlots
+end
+
 local function Rebuild()
     if not NS.Frame or not NS.SealFrame or not NS.GetDB then return end
     local db = NS.GetDB()
@@ -244,6 +271,7 @@ function NS.Refresh()
     end
     Update()
     UpdateManaBar()
+    UpdateBagSlots()
 end
 
 function NS.CreateTrackerFrame()
@@ -350,6 +378,33 @@ function NS.CreateTrackerFrame()
     manaFrame.value = manaValue
     NS.ManaFrame = manaFrame
 
+    local bagSlotsButton = CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate")
+    bagSlotsButton:SetSize(150, 26)
+    bagSlotsButton:SetMovable(true)
+    bagSlotsButton:SetClampedToScreen(true)
+    bagSlotsButton:RegisterForDrag("LeftButton")
+    bagSlotsButton:SetScript("OnDragStart", StartDrag)
+    bagSlotsButton:SetScript("OnDragStop", function(self)
+        SavePosition(self, "bagsPoint")
+    end)
+    bagSlotsButton:SetScript("OnClick", function()
+        if ToggleAllBags then ToggleAllBags() end
+    end)
+    bagSlotsButton:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText(NS.L.BAG_SLOTS_TOOLTIP or "Click to open your bags")
+        GameTooltip:AddLine(string.format(
+            NS.L.BAG_SLOTS_DETAIL or "%d free of %d slots",
+            self.freeSlots or 0,
+            self.totalSlots or 0
+        ), 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    bagSlotsButton:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    NS.BagSlotsButton = bagSlotsButton
+
     local elapsed = 0
     frame:SetScript("OnUpdate", function(_, dt)
         elapsed = elapsed + dt
@@ -363,6 +418,8 @@ function NS.CreateTrackerFrame()
     frame:RegisterEvent("UNIT_POWER_UPDATE")
     frame:RegisterEvent("UNIT_MAXPOWER")
     frame:RegisterEvent("UNIT_INVENTORY_CHANGED")
+    frame:RegisterEvent("BAG_UPDATE")
+    frame:RegisterEvent("BAG_UPDATE_DELAYED")
     frame:SetScript("OnEvent", function(_, event, unit)
         if event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" then
             if unit == "player" then UpdateManaBar() end
@@ -374,6 +431,8 @@ function NS.CreateTrackerFrame()
             UpdateManaBar()
         elseif event == "UNIT_INVENTORY_CHANGED" and unit == "player" then
             if NS.Refresh then NS.Refresh() end
+        elseif event == "BAG_UPDATE" or event == "BAG_UPDATE_DELAYED" then
+            UpdateBagSlots()
         end
     end)
 
@@ -381,7 +440,7 @@ function NS.CreateTrackerFrame()
 end
 
 function NS.RestorePosition()
-    if not NS.Frame or not NS.SealFrame or not NS.ManaFrame or not NS.GetDB then return end
+    if not NS.Frame or not NS.SealFrame or not NS.ManaFrame or not NS.BagSlotsButton or not NS.GetDB then return end
     local db = NS.GetDB()
     if not db then return end
     local className = NS.GetActiveClass and NS.GetActiveClass() or NS.GetPlayerClassKey()
@@ -390,6 +449,7 @@ function NS.RestorePosition()
     local point = positions and positions.point or profile and profile.point or db.point
     local sealPoint = positions and positions.sealPoint or profile and profile.sealPoint
     local manaPoint = positions and positions.manaPoint or profile and profile.manaPoint
+    local bagsPoint = positions and positions.bagsPoint or profile and profile.bagsPoint
 
     local function RestoreFramePosition(frame, saved, defaultY)
         frame:ClearAllPoints()
@@ -406,6 +466,7 @@ function NS.RestorePosition()
 
     RestoreFramePosition(NS.Frame, point, -180)
     RestoreFramePosition(NS.SealFrame, sealPoint, -280)
+    RestoreFramePosition(NS.BagSlotsButton, bagsPoint, -390)
     NS.ManaFrame:ClearAllPoints()
     if manaPoint then
         if type(manaPoint[1]) == "string" then

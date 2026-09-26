@@ -73,6 +73,11 @@ function NS.RegisterOptions()
     addCheckbox("locked", "locked", false, "LOCK", "LOCK_DESC")
 
     if layout and layout.AddInitializer and CreateSettingsListSectionHeaderInitializer then
+        layout:AddInitializer(CreateSettingsListSectionHeaderInitializer(NS.L.BAGS or "Bags"))
+    end
+    addCheckbox("showBagSlots", "showBagSlots", true, "SHOW_BAG_SLOTS", "SHOW_BAG_SLOTS_DESC")
+
+    if layout and layout.AddInitializer and CreateSettingsListSectionHeaderInitializer then
         layout:AddInitializer(CreateSettingsListSectionHeaderInitializer(NS.L.BUFFS or "Buffs to track"))
     end
 

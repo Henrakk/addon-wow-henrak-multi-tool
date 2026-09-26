@@ -202,6 +202,7 @@ function NS.CopyDefaults()
     db.timerTextSize = math.max(NS.MIN_TIMER_TEXT_SIZE, math.min(NS.MAX_TIMER_TEXT_SIZE, tonumber(db.timerTextSize) or NS.DEFAULT_TIMER_TEXT_SIZE))
     db.showNames = db.showNames ~= false
     db.showMissingText = db.showMissingText ~= false
+    db.showBagSlots = db.showBagSlots ~= false
     db.locked = db.locked == true
     db.autoClass = db.autoClass ~= false
     db.activeClass = db.activeClass or NS.GetPlayerClassKey()
