@@ -5,6 +5,7 @@ _G[ADDON] = NS
 local icons = {}
 local sealIcons = {}
 local lastPaladinAuraPresent = false
+local refreshPending = false
 
 local function UpdateManaBar()
     if not NS.ManaFrame or not NS.GetPlayerClassKey then return end
@@ -133,6 +134,10 @@ end
 
 local function Update()
     if not NS.Frame or not NS.SealFrame or not NS.GetDB then return end
+    if InCombatLockdown and InCombatLockdown() then
+        refreshPending = true
+        return
+    end
     local db = NS.GetDB()
     if not db then return end
     if not db.enabled then
@@ -259,6 +264,13 @@ local function Update()
 end
 
 function NS.Refresh()
+    if InCombatLockdown and InCombatLockdown() then
+        refreshPending = true
+        UpdateManaBar()
+        UpdateBagSlots()
+        return
+    end
+    refreshPending = false
     if NS.GetDB then
         local db = NS.GetDB()
         if db and db.activeClass then
@@ -420,6 +432,7 @@ function NS.CreateTrackerFrame()
     frame:RegisterEvent("UNIT_INVENTORY_CHANGED")
     frame:RegisterEvent("BAG_UPDATE")
     frame:RegisterEvent("BAG_UPDATE_DELAYED")
+    frame:RegisterEvent("PLAYER_REGEN_ENABLED")
     frame:SetScript("OnEvent", function(_, event, unit)
         if event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" then
             if unit == "player" then UpdateManaBar() end
@@ -433,6 +446,8 @@ function NS.CreateTrackerFrame()
             if NS.Refresh then NS.Refresh() end
         elseif event == "BAG_UPDATE" or event == "BAG_UPDATE_DELAYED" then
             UpdateBagSlots()
+        elseif event == "PLAYER_REGEN_ENABLED" and refreshPending then
+            if NS.Refresh then NS.Refresh() end
         end
     end)
 
