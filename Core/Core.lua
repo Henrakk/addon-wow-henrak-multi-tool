@@ -141,8 +141,7 @@ function NS.GetActiveBuffs()
     local buffs = {}
     for _, buff in ipairs(NS.ClassBuffs[classKey] or {}) do
         local known = NS.GetKnownSpellID(buff) ~= nil
-        local available = known
-        if buff.requiresShield then available = hasShield end
+        local available = known and (not buff.requiresShield or hasShield)
         if not buff.isSeal and available
             and profile.enabled ~= false
             and (profile.buffs[buff.key] == nil or profile.buffs[buff.key] ~= false)
@@ -159,6 +158,7 @@ function NS.GetSealBuffs()
     local seals = {}
     for _, buff in ipairs(NS.ClassBuffs[classKey] or {}) do
         if buff.isSeal
+            and NS.GetKnownSpellID(buff) ~= nil
             and profile.enabled ~= false
             and (profile.buffs[buff.key] == nil or profile.buffs[buff.key] ~= false) then
             table.insert(seals, buff)
@@ -204,6 +204,18 @@ function NS.CopyDefaults()
     db.showMissingText = db.showMissingText ~= false
     db.showBagSlots = db.showBagSlots ~= false
     db.locked = db.locked == true
+    db.xpBarEnabled = db.xpBarEnabled ~= false
+    if db.xpBarStyleVersion ~= 2 then
+        if db.xpBarWidth == nil or db.xpBarWidth == 480 then db.xpBarWidth = 800 end
+        if db.xpBarHeight == nil or db.xpBarHeight == 18 then db.xpBarHeight = 34 end
+        if db.xpBarLocked == nil or db.xpBarLocked == true then db.xpBarLocked = false end
+        db.xpBarStyleVersion = 2
+    end
+    db.xpBarWidth = math.max(240, math.min(1400, tonumber(db.xpBarWidth) or 800))
+    db.xpBarHeight = math.max(14, math.min(48, tonumber(db.xpBarHeight) or 34))
+    db.xpBarShowText = db.xpBarShowText ~= false
+    db.xpBarShowRested = db.xpBarShowRested ~= false
+    db.xpBarLocked = db.xpBarLocked == true
     db.autoClass = db.autoClass ~= false
     db.activeClass = db.activeClass or NS.GetPlayerClassKey()
     db.classProfiles = db.classProfiles or {}

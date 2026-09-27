@@ -6,6 +6,8 @@ local icons = {}
 local sealIcons = {}
 local lastPaladinAuraPresent = false
 local refreshPending = false
+local warningFlashOn = false
+local warningFlashElapsed = 0
 
 local function UpdateManaBar()
     if not NS.ManaFrame or not NS.GetPlayerClassKey then return end
@@ -55,6 +57,82 @@ local function UpdateBagSlots()
     button.totalSlots = totalSlots
 end
 
+local function UpdateExpiryAlert(inCombat)
+    local warning = NS.ExpiryWarning
+    if not warning then return end
+
+    local db = NS.GetDB and NS.GetDB()
+    if not db or db.enabled == false then
+        warning:Hide()
+        return
+    end
+
+    local now = GetTime()
+    local lines = {}
+    local function CheckGroup(iconList)
+        for _, button in ipairs(iconList) do
+            local remaining
+            if button:IsShown() and button.buff and button.lastPresent
+                and button.lastDuration and button.lastRemaining and button.lastRemainingAt then
+                remaining = button.lastRemaining - (now - button.lastRemainingAt)
+            end
+
+            local expiring = remaining and remaining > 0
+                and remaining <= button.lastDuration * 0.05
+            if expiring then
+                local label = NS.L[button.buff.labelKey] or button.buff.key or "Buff"
+                table.insert(lines, string.format(
+                    NS.L.BUFF_EXPIRING_LINE or "%s (%ds)",
+                    label,
+                    math.max(1, math.ceil(remaining))
+                ))
+            end
+
+            if button.timer and remaining and remaining > 0 and remaining < 3600 then
+                if inCombat then
+                    if remaining > 60 then
+                        button.timer:SetText(string.format("%dm %ds", math.floor(remaining / 60), math.floor(remaining % 60)))
+                    else
+                        button.timer:SetText(string.format("%ds", math.floor(remaining + 0.5)))
+                    end
+                    button.timer:Show()
+                end
+            end
+
+            if button.glow then
+                if button.buff and button.buff.isSeal and expiring then
+                    button.glow:SetAlpha(warningFlashOn and 1 or 0.25)
+                    button.glow:Show()
+                    if button.timer then
+                        if warningFlashOn then
+                            button.timer:SetTextColor(1, 0.08, 0.08)
+                        else
+                            button.timer:SetTextColor(1, 1, 1)
+                        end
+                    end
+                else
+                    button.glow:Hide()
+                    if button.buff and button.buff.isSeal and button.timer then
+                        button.timer:SetTextColor(1, 1, 1)
+                    end
+                end
+            end
+        end
+    end
+
+    CheckGroup(icons)
+    CheckGroup(sealIcons)
+
+    if #lines == 0 then
+        warning:Hide()
+        return
+    end
+
+    warning.text:SetText((NS.L.BUFF_EXPIRING_HEADER or "BUFF EXPIRING") .. "\n" .. table.concat(lines, "\n"))
+    warning:SetAlpha(warningFlashOn and 1 or 0.3)
+    warning:Show()
+end
+
 local function Rebuild()
     if not NS.Frame or not NS.SealFrame or not NS.GetDB then return end
     local db = NS.GetDB()
@@ -92,6 +170,7 @@ local function Rebuild()
             local parent = buff.isSeal and NS.SealFrame or NS.Frame
             local b = iconList[i] or NS.CreateBuffIcon(parent, i)
             b:SetSize(size, size)
+            if b.glow then b.glow:SetSize(size * 1.65, size * 1.65) end
             b.timer:SetWidth(size)
             local timerFont, _, timerFlags = b.timer:GetFont()
             b.timer:SetFont(timerFont, timerTextSize, timerFlags)
@@ -134,15 +213,17 @@ end
 
 local function Update()
     if not NS.Frame or not NS.SealFrame or not NS.GetDB then return end
-    if InCombatLockdown and InCombatLockdown() then
-        refreshPending = true
-        return
-    end
     local db = NS.GetDB()
     if not db then return end
     if not db.enabled then
         NS.Frame:Hide()
         NS.SealFrame:Hide()
+        if NS.ExpiryWarning then NS.ExpiryWarning:Hide() end
+        return
+    end
+    if InCombatLockdown and InCombatLockdown() then
+        refreshPending = true
+        UpdateExpiryAlert(true)
         return
     end
 
@@ -192,11 +273,17 @@ local function Update()
                 b.lastPresent = present == true
                 b.lastAura = aura
                 b.lastRemaining = nil
-                if aura and aura.expirationTime then
+                b.lastDuration = nil
+                b.lastRemainingAt = nil
+                if present and aura then
+                    local duration = aura.duration
                     local expirationTime = aura.expirationTime
-                    if not canaccessvalue or canaccessvalue(expirationTime) then
+                    local readable = duration and expirationTime
+                        and (not canaccessvalue or (canaccessvalue(duration) and canaccessvalue(expirationTime)))
+                    if readable then
+                        if duration > 0 then b.lastDuration = duration end
                         local remaining = expirationTime - GetTime()
-                        if remaining > 0 and remaining < 3600 then
+                        if remaining > 0 then
                             b.lastRemaining = remaining
                             b.lastRemainingAt = GetTime()
                         end
@@ -261,6 +348,7 @@ local function Update()
     end
     UpdateGroup(icons)
     UpdateGroup(sealIcons)
+    UpdateExpiryAlert(false)
 end
 
 function NS.Refresh()
@@ -369,6 +457,9 @@ function NS.CreateTrackerFrame()
 
     local manaFrame = CreateFrame("StatusBar", "HenrakMultiToolManaFrame", UIParent, "BackdropTemplate")
     manaFrame:SetSize(180, 20)
+    manaFrame.background = manaFrame:CreateTexture(nil, "BACKGROUND")
+    manaFrame.background:SetAllPoints(manaFrame)
+    manaFrame.background:SetColorTexture(0.08, 0.08, 0.08, 0.9)
     manaFrame:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
     manaFrame:SetStatusBarColor(0.15, 0.45, 0.95, 1)
     manaFrame:SetMinMaxValues(0, 1)
@@ -389,6 +480,24 @@ function NS.CreateTrackerFrame()
     manaValue:SetPoint("CENTER")
     manaFrame.value = manaValue
     NS.ManaFrame = manaFrame
+
+    local expiryWarning = CreateFrame("Frame", "HenrakMultiToolExpiryWarning", UIParent)
+    expiryWarning:SetSize(1000, 180)
+    expiryWarning:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+    expiryWarning:SetFrameStrata("HIGH")
+    local expiryText = expiryWarning:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+    expiryText:SetPoint("CENTER")
+    expiryText:SetWidth(960)
+    expiryText:SetHeight(170)
+    expiryText:SetJustifyH("CENTER")
+    expiryText:SetJustifyV("MIDDLE")
+    expiryText:SetWordWrap(true)
+    local expiryFont = expiryText:GetFont()
+    if expiryFont then expiryText:SetFont(expiryFont, 32, "OUTLINE") end
+    expiryText:SetTextColor(1, 0.2, 0.12)
+    expiryWarning.text = expiryText
+    expiryWarning:Hide()
+    NS.ExpiryWarning = expiryWarning
 
     local bagSlotsButton = CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate")
     bagSlotsButton:SetSize(150, 26)
@@ -419,6 +528,11 @@ function NS.CreateTrackerFrame()
 
     local elapsed = 0
     frame:SetScript("OnUpdate", function(_, dt)
+        warningFlashElapsed = warningFlashElapsed + dt
+        if warningFlashElapsed >= 0.4 then
+            warningFlashElapsed = warningFlashElapsed - 0.4
+            warningFlashOn = not warningFlashOn
+        end
         elapsed = elapsed + dt
         if elapsed >= 0.5 then
             elapsed = 0

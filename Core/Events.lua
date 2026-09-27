@@ -25,6 +25,10 @@ local function Init()
         NS.CreateTrackerFrame()
     end
 
+    if NS.CreateXPBar then
+        NS.CreateXPBar()
+    end
+
     if NS.RegisterOptions then
         NS.RegisterOptions()
     end

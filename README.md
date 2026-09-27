@@ -1,6 +1,6 @@
 # PaladinCaernSidhe — WoW Forever
 
-Version 1.0.2
+Version 1.0.3
 
 ## Structure
 
@@ -15,6 +15,7 @@ PaladinCaernSidhe/
 │
 ├── UI/
 │   ├── Tracker.lua
+│   ├── XPBar.lua
 │   ├── Icon.lua
 │   └── Options.lua
 │
@@ -29,12 +30,14 @@ PaladinCaernSidhe/
 - Detects buffs by spell ID, so the same code works on English and French clients.
 - Shows the localized name + missing / manquant when a selected buff is absent.
 - Displays a short remaining-time counter when an aura has an expiration time.
+- Displays a separate XP bar with rested XP, session XP, and XP per hour; click the bar to reset session statistics.
 - Settings are available in the game's AddOns settings.
+- The XP bar has its own **Experience Bar** subsection in the addon's settings; it starts unlocked and can be dragged directly.
 - /pcs opens settings; /pcs lock, /pcs unlock, /pcs reset manage the frame.
 
 ## CurseForge publishing
 
-The GitHub Actions workflow packages and uploads the addon to CurseForge when a version tag is pushed (for example, `v1.0.2`). `Interface-Forever: 16001` marks WoW Forever `1.60.1` compatibility; the base `Interface: 11509` remains the separate client API version.
+The GitHub Actions workflow packages and uploads the addon to CurseForge when a version tag is pushed (for example, `v1.0.3`). `Interface-Forever: 16001` marks WoW Forever `1.60.1` compatibility; the base `Interface: 11509` remains the separate client API version.
 
 Configure these values in the GitHub repository under **Settings > Secrets and variables > Actions**:
 
@@ -44,6 +47,6 @@ Configure these values in the GitHub repository under **Settings > Secrets and v
 Create a tag for the version and push it to GitHub to publish:
 
 ```sh
-git tag -a v1.0.2 -m "v1.0.2"
-git push origin v1.0.2
+git tag -a v1.0.3 -m "v1.0.3"
+git push origin v1.0.3
 ```

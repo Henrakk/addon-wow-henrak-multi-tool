@@ -88,12 +88,27 @@ function NS.RegisterOptions()
         local variable = "class_" .. className .. "_" .. buff.key
         local value = profile.buffs and profile.buffs[buff.key]
         local buffSetting = Settings.RegisterAddOnSetting and Settings.RegisterAddOnSetting(
-            category, ADDON .. "_" .. variable, variable,
+            category, ADDON .. "_" .. variable, buff.key,
             profile.buffs, "boolean", label, value ~= false
         )
-        if buffSetting and Settings.CreateCheckbox then
-            Settings.CreateCheckbox(category, buffSetting, label)
+        if buffSetting then
+            if buffSetting.SetValueChangedCallback then
+                buffSetting:SetValueChangedCallback(function(_, newValue)
+                    profile.buffs[buff.key] = newValue == true
+                    Refresh()
+                end)
+            end
+            if Settings.CreateCheckbox then
+                Settings.CreateCheckbox(category, buffSetting, label)
+            end
         end
+    end
+
+    if layout and layout.AddInitializer and CreateSettingsListSectionHeaderInitializer then
+        layout:AddInitializer(CreateSettingsListSectionHeaderInitializer(NS.L.XP_TITLE or "Experience Bar"))
+    end
+    if NS.RegisterXPOptions then
+        NS.RegisterXPOptions(category)
     end
 
     if category and category.SetCommit then
