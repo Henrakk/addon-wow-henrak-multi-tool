@@ -3,7 +3,7 @@
 ## Title: HenrakMultiTool
 ## Notes: Multi-class self-buff tracker for WoW Forever
 ## Author: Henrak
-## Version: 1.0.3
+## Version: 1.0.4
 ## SavedVariables: HenrakMultiToolDB
 
 Core\Core.lua
