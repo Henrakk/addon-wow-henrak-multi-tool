@@ -1,4 +1,4 @@
-local ADDON = "HenrakMultiTool"
+local ADDON = "MultiTool"
 local NS = _G[ADDON] or {}
 _G[ADDON] = NS
 
@@ -11,7 +11,7 @@ function NS.RegisterOptions()
     if NS.CopyDefaults then NS.CopyDefaults() end
     if not Settings or not Settings.RegisterVerticalLayoutCategory then return end
 
-    local category, layout = Settings.RegisterVerticalLayoutCategory(NS.L.TITLE or "HenrakMultiTool")
+    local category, layout = Settings.RegisterVerticalLayoutCategory(NS.L.TITLE or "MultiTool")
     if not category then return end
 
     NS.SettingsCategory = category
@@ -127,19 +127,19 @@ local function GetClassNames()
     return list
 end
 
-SLASH_HENRAKMULTITOOL1 = "/henrak"
-SLASH_HENRAKMULTITOOL2 = "/hmt"
-SlashCmdList.HENRAKMULTITOOL = function(msg)
+SLASH_MULTITOOL1 = "/mtool"
+SLASH_MULTITOOL2 = "/multitool"
+SlashCmdList.MULTITOOL = function(msg)
     local db = NS.GetDB and NS.GetDB() or {}
     msg = string.lower(msg or "")
     local cmd, arg = msg:match("^(%S+)%s*(.*)$")
 
     if cmd == "lock" then
         db.locked = true
-        print("|cff70d5ffHenrakMultiTool|r: " .. (NS.L.LOCKED or "locked"))
+        print("|cff70d5ffMultiTool|r: " .. (NS.L.LOCKED or "locked"))
     elseif cmd == "unlock" then
         db.locked = false
-        print("|cff70d5ffHenrakMultiTool|r: " .. (NS.L.UNLOCKED or "unlocked"))
+        print("|cff70d5ffMultiTool|r: " .. (NS.L.UNLOCKED or "unlocked"))
     elseif cmd == "reset" then
         local className = NS.GetActiveClass and NS.GetActiveClass() or NS.GetPlayerClassKey()
         local profile = NS.GetClassProfile and NS.GetClassProfile(className)
@@ -155,33 +155,35 @@ SlashCmdList.HENRAKMULTITOOL = function(msg)
             positions.manaPoint = nil
         end
         if NS.RestorePosition then NS.RestorePosition() end
-        print("|cff70d5ffHenrakMultiTool|r: " .. (NS.L.RESET or "position reset"))
+        print("|cff70d5ffMultiTool|r: " .. (NS.L.RESET or "position reset"))
     elseif cmd == "class" then
         local className = string.upper(arg or "")
         if NS.ClassBuffs and NS.ClassBuffs[className] then
             db.activeClass = className
             db.autoClass = false
             if NS.Refresh then NS.Refresh() end
-            print("|cff70d5ffHenrakMultiTool|r: class set to " .. className)
+            print("|cff70d5ffMultiTool|r: class set to " .. className)
         else
             local names = GetClassNames()
-            print("|cff70d5ffHenrakMultiTool|r: available classes: " .. table.concat(names, ", "))
+            print("|cff70d5ffMultiTool|r: available classes: " .. table.concat(names, ", "))
         end
     elseif cmd == "size" then
         local size = tonumber(arg)
         if size then
             NS.SetIconSize(size)
-            print("|cff70d5ffHenrakMultiTool|r: icon size = " .. tostring(size))
+            print("|cff70d5ffMultiTool|r: icon size = " .. tostring(size))
         end
     elseif cmd == "auto" then
         db.autoClass = true
         NS.AutoSelectClass()
-        print("|cff70d5ffHenrakMultiTool|r: auto class enabled")
+        print("|cff70d5ffMultiTool|r: auto class enabled")
+    elseif cmd == "questxp" then
+        if NS.DebugQuestXP then NS.DebugQuestXP() end
     else
         if Settings and Settings.OpenToCategory and NS.SettingsCategory then
             Settings.OpenToCategory(NS.SettingsCategory:GetID())
         else
-            print("|cff70d5ffHenrakMultiTool|r: /henrak class <CLASS>, /henrak size <N>, /henrak auto, /henrak lock, /henrak unlock, /henrak reset")
+            print("|cff70d5ffMultiTool|r: /mtool class <CLASS>, /mtool size <N>, /mtool auto, /mtool lock, /mtool unlock, /mtool reset, /mtool questxp")
         end
     end
 end

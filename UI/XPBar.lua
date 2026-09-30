@@ -1,4 +1,4 @@
-local ADDON = "HenrakMultiTool"
+local ADDON = "MultiTool"
 local NS = _G[ADDON] or {}
 _G[ADDON] = NS
 
@@ -9,6 +9,154 @@ local previousLevel
 local previousXP
 local previousXPMax
 
+local function GetQuestIDForIndex(index)
+    if C_QuestLog and C_QuestLog.GetInfo then
+        local info = C_QuestLog.GetInfo(index)
+        return info and info.questID
+    end
+    return nil
+end
+
+local function GetQuestRewardXP(index, questID)
+    -- Try every known calling convention across client/server API flavors
+    -- until one returns a positive value.
+    local xp
+
+    if GetQuestLogRewardXP then
+        xp = tonumber((GetQuestLogRewardXP(index)))
+        if xp and xp > 0 then return xp end
+    end
+
+    if questID then
+        if C_QuestLog and C_QuestLog.GetQuestLogRewardXP then
+            xp = tonumber((C_QuestLog.GetQuestLogRewardXP(questID)))
+            if xp and xp > 0 then return xp end
+        end
+        if GetQuestLogRewardXP then
+            xp = tonumber((GetQuestLogRewardXP(questID)))
+            if xp and xp > 0 then return xp end
+        end
+    end
+
+    if SelectQuestLogEntry and GetQuestLogSelection and GetQuestLogRewardXP then
+        local previousSelection = GetQuestLogSelection()
+        SelectQuestLogEntry(index)
+        xp = tonumber((GetQuestLogRewardXP()))
+        SelectQuestLogEntry(previousSelection)
+        if xp and xp > 0 then return xp end
+    end
+
+    return 0
+end
+
+local function IsQuestComplete(isComplete)
+    return isComplete == 1 or isComplete == true
+end
+
+local function IsQuestLogEntryComplete(index, questID)
+    -- Prefer the legacy API: it reliably reflects the same "Quest Complete!"
+    -- state shown in the default quest log UI, on servers where the modern
+    -- C_QuestLog API exists but doesn't populate isComplete.
+    if GetQuestLogTitle then
+        local _, _, _, _, _, _, isComplete = GetQuestLogTitle(index)
+        if IsQuestComplete(isComplete) then return true end
+    end
+
+    if C_QuestLog and C_QuestLog.GetInfo then
+        local info = C_QuestLog.GetInfo(index)
+        if info and IsQuestComplete(info.isComplete) then return true end
+    end
+
+    if questID then
+        if C_QuestLog and C_QuestLog.IsComplete and C_QuestLog.IsComplete(questID) then
+            return true
+        end
+        if _G.IsQuestComplete and _G.IsQuestComplete(questID) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function GetNumQuestLogEntriesCompat()
+    if GetNumQuestLogEntries then return GetNumQuestLogEntries() end
+    if C_QuestLog and C_QuestLog.GetNumQuestLogEntries then return C_QuestLog.GetNumQuestLogEntries() end
+    return 0
+end
+
+local function IsQuestLogHeader(index)
+    if GetQuestLogTitle then
+        local _, _, _, _, isHeader = GetQuestLogTitle(index)
+        return isHeader
+    end
+    if C_QuestLog and C_QuestLog.GetInfo then
+        local info = C_QuestLog.GetInfo(index)
+        return info and info.isHeader
+    end
+    return false
+end
+
+local function GetCompletedQuestXP()
+    local total = 0
+    local entryCount = GetNumQuestLogEntriesCompat()
+    for index = 1, entryCount do
+        if not IsQuestLogHeader(index) then
+            local questID = GetQuestIDForIndex(index)
+            if IsQuestLogEntryComplete(index, questID) then
+                total = total + GetQuestRewardXP(index, questID)
+            end
+        end
+    end
+    return total
+end
+
+local function DebugQuestXP()
+    print("|cff70d5ffMultiTool|r: quest XP debug")
+    print("  C_QuestLog available: " .. tostring(C_QuestLog ~= nil))
+    if C_QuestLog then
+        print("  C_QuestLog.GetInfo: " .. tostring(C_QuestLog.GetInfo ~= nil))
+        print("  C_QuestLog.GetQuestLogRewardXP: " .. tostring(C_QuestLog.GetQuestLogRewardXP ~= nil))
+        print("  C_QuestLog.IsComplete: " .. tostring(C_QuestLog.IsComplete ~= nil))
+    end
+    print("  GetQuestLogTitle: " .. tostring(GetQuestLogTitle ~= nil))
+    print("  GetQuestLogRewardXP: " .. tostring(GetQuestLogRewardXP ~= nil))
+    print("  SelectQuestLogEntry: " .. tostring(SelectQuestLogEntry ~= nil))
+    print("  IsQuestComplete (global): " .. tostring(_G.IsQuestComplete ~= nil))
+
+    local entryCount = GetNumQuestLogEntriesCompat()
+    print(string.format("  Quest log entries: %d", entryCount))
+
+    for index = 1, entryCount do
+        if not IsQuestLogHeader(index) then
+            local title
+            local legacyComplete
+            if GetQuestLogTitle then
+                title, _, _, _, _, _, legacyComplete = GetQuestLogTitle(index)
+            end
+            local questID = GetQuestIDForIndex(index)
+            local modernComplete
+            if C_QuestLog and C_QuestLog.GetInfo then
+                local info = C_QuestLog.GetInfo(index)
+                if info then
+                    title = title or info.title
+                    modernComplete = info.isComplete
+                end
+            end
+            local resolvedComplete = IsQuestLogEntryComplete(index, questID)
+            local xp = GetQuestRewardXP(index, questID)
+            print(string.format(
+                "  [%d] %s | legacyComplete=%s | modernComplete=%s | resolved=%s | questID=%s | xp=%s",
+                index, tostring(title), tostring(legacyComplete), tostring(modernComplete),
+                tostring(resolvedComplete), tostring(questID), tostring(xp)
+            ))
+        end
+    end
+
+    print(string.format("  Total completed quest XP: %s", tostring(GetCompletedQuestXP())))
+end
+NS.DebugQuestXP = DebugQuestXP
+
 local function GetXPState()
     if not UnitXP or not UnitXPMax then return nil end
     local current = UnitXP("player") or 0
@@ -16,6 +164,7 @@ local function GetXPState()
     if maximum <= 0 then return nil end
     return UnitLevel("player") or 1, current, maximum, (GetXPExhaustion and GetXPExhaustion()) or 0
 end
+
 
 local function FormatNumber(value)
     value = math.floor(tonumber(value) or 0)
@@ -48,7 +197,7 @@ local function RecordXP(level, current, maximum)
     previousXPMax = maximum
 end
 
-local function ShowTooltip(level, current, maximum, rested)
+local function ShowTooltip(level, current, maximum, rested, questXP)
     if not GameTooltip then return end
     local elapsed = GetTime() - sessionStartedAt
     local rate = elapsed > 0 and sessionXP * 3600 / elapsed or 0
@@ -59,6 +208,11 @@ local function ShowTooltip(level, current, maximum, rested)
     GameTooltip:AddLine(string.format(NS.L.XP_SESSION_TIME or "Session: %s", FormatElapsed(elapsed)), 1, 1, 1)
     GameTooltip:AddLine(string.format(NS.L.XP_RESTED or "Rested XP: %s", FormatNumber(rested)), 0.45, 0.75, 1)
     GameTooltip:AddLine(string.format(NS.L.XP_PROGRESS or "Level %d | %s / %s XP | %s%%", level, FormatNumber(current), FormatNumber(maximum), string.format("%.1f", current / maximum * 100)), 0.8, 0.8, 0.8)
+    if questXP > 0 then
+        local projectedXP = current + questXP
+        GameTooltip:AddLine(string.format(NS.L.XP_QUEST_PROJECTION or "Completed quest XP: %s", FormatNumber(questXP)), 1, 0.72, 0.1)
+        GameTooltip:AddLine(string.format(NS.L.XP_AFTER_QUESTS or "After turn-in: %s / %s XP (%s%%)", FormatNumber(projectedXP), FormatNumber(maximum), string.format("%.1f", projectedXP / maximum * 100)), 1, 0.72, 0.1)
+    end
     GameTooltip:AddLine(NS.L.XP_CLICK_HINT or "Click to reset session statistics.", 0.8, 0.8, 0.8)
     GameTooltip:Show()
 end
@@ -78,6 +232,8 @@ function NS.RefreshXPBar()
     end
 
     RecordXP(level, current, maximum)
+    local questXP = GetCompletedQuestXP()
+    local projectedXP = current + questXP
     frame:SetSize(db.xpBarWidth or 800, db.xpBarHeight or 34)
     frame:SetMinMaxValues(0, maximum)
     frame:SetValue(current)
@@ -90,15 +246,29 @@ function NS.RefreshXPBar()
     frame.rested:SetPoint("LEFT", frame, "LEFT", xpOffset, 0)
     frame.rested:SetSize(math.max(0, restedWidth), frame:GetHeight())
     frame.rested:SetShown(restedWidth > 0)
+    -- The visible segment can't exceed the bar's own width (XP past the level
+    -- cap would overflow into the next level), but the displayed number and
+    -- percentage below are never clamped, so an over-100% projection is shown.
+    local questProjectionWidth = width * math.min(questXP, maximum - current) / maximum
+    frame.questProjection:ClearAllPoints()
+    frame.questProjection:SetPoint("LEFT", frame, "LEFT", xpOffset, 0)
+    frame.questProjection:SetSize(math.max(0, questProjectionWidth), frame:GetHeight())
+    frame.questProjection:SetShown(questProjectionWidth > 0)
     local percent = current / maximum * 100
+    local projectedPercent = projectedXP / maximum * 100
     frame.levelText:SetText(string.format(NS.L.XP_LEVEL or "Level %d", level))
-    frame.text:SetText(string.format("%s / %s XP", FormatNumber(current), FormatNumber(maximum)))
-    frame.percentText:SetText(string.format("%.1f%%", percent))
+    if questXP > 0 then
+        frame.text:SetText(string.format(NS.L.XP_BAR_PROJECTION or "Projected: %s XP", FormatNumber(projectedXP)))
+        frame.percentText:SetText(string.format("%.1f%%", projectedPercent))
+    else
+        frame.text:SetText(string.format("%s / %s XP", FormatNumber(current), FormatNumber(maximum)))
+        frame.percentText:SetText(string.format("%.1f%%", percent))
+    end
     frame.levelText:SetShown(db.xpBarShowText ~= false)
     frame.percentText:SetShown(db.xpBarShowText ~= false)
     frame:Show()
     if frame:IsMouseOver() then
-        ShowTooltip(level, current, maximum, rested)
+        ShowTooltip(level, current, maximum, rested, questXP)
     end
 end
 
@@ -110,7 +280,7 @@ local function ResetSession()
     previousXP = current
     previousXPMax = maximum
     NS.RefreshXPBar()
-    print("|cff70d5ffHenrakMultiTool|r: " .. (NS.L.XP_RESET or "XP session statistics reset."))
+    print("|cff70d5ffMultiTool|r: " .. (NS.L.XP_RESET or "XP session statistics reset."))
 end
 
 function NS.CreateXPBar()
@@ -118,7 +288,7 @@ function NS.CreateXPBar()
     local db = NS.GetDB and NS.GetDB() or {}
     sessionStartedAt = GetTime()
 
-    frame = CreateFrame("StatusBar", "HenrakMultiToolXPBar", UIParent, "BackdropTemplate")
+    frame = CreateFrame("StatusBar", "MultiToolXPBar", UIParent, "BackdropTemplate")
     frame:SetSize(db.xpBarWidth or 800, db.xpBarHeight or 34)
     frame:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
     frame:SetStatusBarColor(0.48, 0.22, 0.82, 1)
@@ -137,6 +307,11 @@ function NS.CreateXPBar()
     frame.rested = frame:CreateTexture(nil, "ARTWORK", nil, 1)
     frame.rested:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
     frame.rested:SetVertexColor(0.3, 0.62, 1, 0.7)
+
+    frame.questProjection = frame:CreateTexture(nil, "ARTWORK", nil, 2)
+    frame.questProjection:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    frame.questProjection:SetVertexColor(1, 0.72, 0.1, 0.95)
+    frame.questProjection:Hide()
 
     frame.border = {}
     for _, edge in ipairs({ "TOP", "BOTTOM", "LEFT", "RIGHT" }) do
@@ -220,7 +395,7 @@ function NS.CreateXPBar()
     end)
     frame:SetScript("OnEnter", function()
         local level, current, maximum, rested = GetXPState()
-        if level then ShowTooltip(level, current, maximum, rested) end
+        if level then ShowTooltip(level, current, maximum, rested, GetCompletedQuestXP()) end
     end)
     frame:SetScript("OnLeave", function()
         if GameTooltip then GameTooltip:Hide() end
@@ -245,6 +420,7 @@ function NS.CreateXPBar()
     frame:RegisterEvent("PLAYER_LEVEL_UP")
     frame:RegisterEvent("UPDATE_EXHAUSTION")
     frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    frame:RegisterEvent("QUEST_LOG_UPDATE")
     frame:SetScript("OnEvent", NS.RefreshXPBar)
 
     NS.XPBar = frame

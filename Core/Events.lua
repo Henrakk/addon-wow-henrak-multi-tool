@@ -1,4 +1,4 @@
-local ADDON = "HenrakMultiTool"
+local ADDON = "MultiTool"
 local NS = _G[ADDON] or {}
 _G[ADDON] = NS
 

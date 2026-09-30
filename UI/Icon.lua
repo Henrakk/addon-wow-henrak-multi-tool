@@ -1,4 +1,4 @@
-local ADDON = "HenrakMultiTool"
+local ADDON = "MultiTool"
 local NS = _G[ADDON] or {}
 _G[ADDON] = NS
 
@@ -6,7 +6,7 @@ function NS.CreateBuffIcon(frame, index)
     local db = NS.GetDB and NS.GetDB() or {}
     local size = tonumber(db.iconSize) or NS.DEFAULT_ICON_SIZE
     local b = CreateFrame("Button", nil, frame, "SecureActionButtonTemplate,BackdropTemplate")
-    b:RegisterForClicks("AnyDown")
+    b:RegisterForClicks("LeftButtonDown")
     b:SetSize(size, size)
     b.icon = b:CreateTexture(nil, "ARTWORK")
     b.icon:SetAllPoints()

@@ -1,10 +1,10 @@
 ## Interface: 11509
 ## Interface-Forever: 16001
-## Title: HenrakMultiTool
+## Title: MultiTool
 ## Notes: Multi-class self-buff tracker for WoW Forever
 ## Author: Henrak
-## Version: 1.0.4
-## SavedVariables: HenrakMultiToolDB
+## Version: 1.0.10
+## SavedVariables: MultiToolDB
 
 Core\Core.lua
 Core\Buffs.lua

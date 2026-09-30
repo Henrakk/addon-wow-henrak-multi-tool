@@ -1,4 +1,4 @@
-local ADDON = "HenrakMultiTool"
+local ADDON = "MultiTool"
 local NS = _G[ADDON] or {}
 _G[ADDON] = NS
 
@@ -155,7 +155,7 @@ local function FormatRemaining(remaining)
 end
 
 local function RenderSealStatus()
-    if not NS.SealFrame or not NS.SealFrame.title then return end
+    if not NS.SealFrame then return end
 
     local now = GetTime()
     local remaining = sealState.expiresAt and sealState.expiresAt - now
@@ -163,28 +163,14 @@ local function RenderSealStatus()
         sealState.active = false
         sealState.key = nil
         sealState.expiresAt = nil
+        sealState.castAt = nil
+        sealState.previousExpiresAt = nil
         remaining = nil
     end
 
-    local titleText = NS.L.SEALS or "Seals"
-    local seals = NS.GetSealBuffs and NS.GetSealBuffs() or {}
-    if sealState.active and sealState.key then
-        for _, seal in ipairs(seals) do
-            if seal.key == sealState.key then
-                titleText = NS.L[seal.labelKey] or seal.key
-                break
-            end
-        end
-    elseif #seals > 0 then
-        titleText = NS.L.SEAL_MISSING or "Seal missing"
+    if NS.SealFrame.title then
+        NS.SealFrame.title:SetText(sealState.active and remaining and FormatRemaining(remaining) or "")
     end
-
-    local title = NS.SealFrame.title
-    title:SetWidth(math.max(1, NS.SealFrame:GetWidth() - 16))
-    if sealState.active and remaining then
-        titleText = titleText .. "  " .. FormatRemaining(remaining)
-    end
-    title:SetText(titleText)
 
     for _, button in ipairs(sealIcons) do
         if button:IsShown() and button.buff and button.buff.isSeal then
@@ -209,12 +195,7 @@ local function RenderSealStatus()
                 button:SetAlpha(0.45)
                 button.icon:SetDesaturated(true)
                 if button.timer then button.timer:Hide() end
-                if button.buff.isMissingSeal then
-                    button.missing:SetText(NS.L.SEAL_MISSING or "Seal missing")
-                    button.missing:Show()
-                else
-                    button.missing:Hide()
-                end
+                button.missing:Hide()
             end
         end
     end
@@ -238,32 +219,57 @@ local function UpdateSealStatus()
         if sealState.key ~= activeSeal.key then
             sealState.duration = nil
             sealState.expiresAt = nil
+            sealState.castAt = nil
+            sealState.previousExpiresAt = nil
         end
         sealState.active = true
         sealState.key = activeSeal.key
         local duration, expirationTime = GetSealDurationAndExpiration(activeAura)
-        if expirationTime and expirationTime > GetTime() then
+        if expirationTime and expirationTime > GetTime()
+            and (not sealState.castAt or expirationTime > sealState.castAt)
+            and (not sealState.previousExpiresAt or expirationTime > sealState.previousExpiresAt) then
             sealState.duration = duration and duration > 0 and duration or sealState.duration
             sealState.expiresAt = expirationTime
+            sealState.castAt = nil
+            sealState.previousExpiresAt = nil
+        elseif not sealState.expiresAt then
+            sealState.duration = sealState.duration or 30
+            sealState.expiresAt = GetTime() + sealState.duration
         end
     elseif not inCombat or not sealState.expiresAt or sealState.expiresAt <= GetTime() then
         sealState.active = false
         sealState.key = nil
         sealState.duration = nil
         sealState.expiresAt = nil
+        sealState.castAt = nil
+        sealState.previousExpiresAt = nil
     end
 
     RenderSealStatus()
 end
 
-local function ResetSealTimerAfterCast(spellID)
-    if not spellID then return end
+local function ResetSealTimerAfterCast(...)
+    local castValues = {...}
+    if #castValues == 0 then return end
 
     for _, seal in ipairs(NS.GetSealBuffs and NS.GetSealBuffs() or {}) do
-        local matchesSpell = NS.GetKnownSpellID and NS.GetKnownSpellID(seal) == spellID
-        if not matchesSpell then
-            for _, sealSpellID in ipairs(seal.spellIDs or {}) do
-                if sealSpellID == spellID then
+        local matchesSpell = false
+        for _, sealSpellID in ipairs(seal.spellIDs or {}) do
+            local localizedSpellName = NS.SpellName and NS.SpellName(sealSpellID)
+            for _, castValue in ipairs(castValues) do
+                local castSpellID = tonumber(castValue)
+                if castSpellID == sealSpellID
+                    or (localizedSpellName and castValue == localizedSpellName) then
+                    matchesSpell = true
+                    break
+                end
+            end
+            if matchesSpell then break end
+        end
+        if not matchesSpell and NS.GetKnownSpellID then
+            local knownSpellID = NS.GetKnownSpellID(seal)
+            for _, castValue in ipairs(castValues) do
+                if tonumber(castValue) == knownSpellID then
                     matchesSpell = true
                     break
                 end
@@ -273,11 +279,16 @@ local function ResetSealTimerAfterCast(spellID)
             if sealState.key ~= seal.key then
                 sealState.duration = nil
                 sealState.expiresAt = nil
+                sealState.castAt = nil
+                sealState.previousExpiresAt = nil
             end
+            local now = GetTime()
             sealState.active = true
             sealState.key = seal.key
-            sealState.duration = sealState.duration or 30
-            sealState.expiresAt = GetTime() + sealState.duration
+            sealState.previousExpiresAt = sealState.expiresAt
+            sealState.duration = 30
+            sealState.expiresAt = now + sealState.duration
+            sealState.castAt = now
             RenderSealStatus()
             UpdateExpiryAlert(true)
             return
@@ -317,7 +328,7 @@ local function Rebuild()
     NS.SealFrame:SetSize(math.max(180, #sealActive * (sealSize + NS.SPACING) + 16), rowHeight)
     NS.SealFrame:SetShown(#sealActive > 0)
 
-    local function BuildGroup(buffList, iconList, size, yOffset)
+    local function BuildGroup(buffList, iconList, size, yOffset, positionKey)
         for i, buff in ipairs(buffList) do
             local parent = buff.isSeal and NS.SealFrame or NS.Frame
             local b = iconList[i] or NS.CreateBuffIcon(parent, i)
@@ -350,9 +361,9 @@ local function Rebuild()
         end
     end
 
-    BuildGroup(active, icons, db.iconSize, -22)
+    BuildGroup(active, icons, db.iconSize, -6, "point")
     if #sealActive > 0 then
-        BuildGroup(sealActive, sealIcons, sealSize, -22)
+        BuildGroup(sealActive, sealIcons, sealSize, -22, "sealPoint")
     end
 
     for i = #active + 1, #icons do
@@ -475,7 +486,7 @@ local function Update()
                 b:SetAlpha(0.45)
                 b.icon:SetDesaturated(true)
                 b.timer:Hide()
-                if db.showMissingText or b.buff.isMissingSeal then
+                if db.showMissingText and not b.buff.isSeal then
                     local label = NS.L[b.buff.labelKey] or NS.SpellName(b.buff.spellIDs[1])
                     if b.buff.groupKey then
                         local groupKey = b.buff.groupKey
@@ -486,8 +497,6 @@ local function Update()
                             b.missing:Show()
                             groupAlertShown[groupKey] = true
                         end
-                    elseif b.buff.isMissingSeal then
-                        b.missing:SetText(label)
                     else
                         b.missing:SetText(label .. " " .. (NS.L.MISSING or "missing"))
                     end
@@ -527,13 +536,12 @@ function NS.Refresh()
 end
 
 function NS.CreateTrackerFrame()
-    local frame = CreateFrame("Frame", "HenrakMultiToolFrame", UIParent, "BackdropTemplate")
+    local frame = CreateFrame("Frame", "MultiToolFrame", UIParent, "BackdropTemplate")
     frame:SetSize(360, 70)
     frame:SetPoint("CENTER", 0, -180)
     frame:SetMovable(true)
     frame:EnableMouse(true)
     frame:SetClampedToScreen(true)
-    frame:RegisterForDrag("LeftButton")
     frame:EnableMouseWheel(true)
 
     local function StartDrag(self)
@@ -558,10 +566,57 @@ function NS.CreateTrackerFrame()
         end
     end
 
-    frame:SetScript("OnDragStart", StartDrag)
-    frame:SetScript("OnDragStop", function(self)
-        SavePosition(self, "point")
-    end)
+    frame.SavePosition = SavePosition
+
+    local function CreateMoveHandle(movableFrame, positionKey)
+        local handle = CreateFrame("Button", nil, movableFrame, "BackdropTemplate")
+        handle:SetSize(16, 16)
+        handle:SetPoint("BOTTOM", movableFrame, "TOP", 0, 2)
+        handle:SetFrameLevel(movableFrame:GetFrameLevel() + 10)
+        handle:SetBackdrop({
+            bgFile = "Interface\\Buttons\\WHITE8X8",
+            edgeFile = "Interface\\Buttons\\WHITE8X8",
+            edgeSize = 1,
+        })
+        handle:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
+        handle:SetBackdropBorderColor(0.75, 0.75, 0.75, 1)
+        local function StopHandleMove()
+            if not handle.isMoving then return end
+            handle.isMoving = nil
+            movableFrame:StopMovingOrSizing()
+            movableFrame:SavePosition(positionKey)
+        end
+        handle:SetScript("OnMouseDown", function(_, mouseButton)
+            if mouseButton ~= "LeftButton" then return end
+            local currentDB = NS.GetDB and NS.GetDB()
+            if currentDB and not currentDB.locked and not InCombatLockdown() then
+                handle.isMoving = true
+                movableFrame:StartMoving()
+            end
+        end)
+        handle:SetScript("OnMouseUp", function(_, mouseButton)
+            if mouseButton == "LeftButton" then StopHandleMove() end
+        end)
+        handle:SetScript("OnUpdate", function()
+            if handle.isMoving and not IsMouseButtonDown("LeftButton") then
+                StopHandleMove()
+            end
+        end)
+        handle:SetScript("OnEnter", function(self)
+            self:SetBackdropBorderColor(0.3, 0.8, 1, 1)
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:SetText(NS.L.MOVE_HANDLE_TOOLTIP or "Drag to move")
+            GameTooltip:Show()
+        end)
+        handle:SetScript("OnLeave", function(self)
+            self:SetBackdropBorderColor(0.75, 0.75, 0.75, 1)
+            GameTooltip:Hide()
+        end)
+        movableFrame.moveHandle = handle
+        handle:Hide()
+    end
+
+    CreateMoveHandle(frame, "point")
 
     frame:SetScript("OnMouseWheel", function(_, delta)
         if not (NS.GetDB and NS.GetDB().locked) then
@@ -570,11 +625,6 @@ function NS.CreateTrackerFrame()
         end
     end)
 
-    local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("TOPLEFT", 8, -6)
-    title:SetText("HenrakMultiTool")
-
-    frame.title = title
     local status = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     status:SetJustifyH("CENTER")
     status:SetTextColor(1, 0.25, 0.25)
@@ -583,31 +633,30 @@ function NS.CreateTrackerFrame()
     frame.status = status
     NS.Frame = frame
 
-    local sealFrame = CreateFrame("Frame", "HenrakMultiToolSealFrame", UIParent, "BackdropTemplate")
+    local sealFrame = CreateFrame("Frame", "MultiToolSealFrame", UIParent, "BackdropTemplate")
     sealFrame:SetSize(180, 70)
     sealFrame:SetPoint("CENTER", 0, -280)
     sealFrame:SetMovable(true)
     sealFrame:EnableMouse(true)
     sealFrame:SetClampedToScreen(true)
-    sealFrame:RegisterForDrag("LeftButton")
     sealFrame:EnableMouseWheel(true)
-    sealFrame:SetScript("OnDragStart", StartDrag)
-    sealFrame:SetScript("OnDragStop", function(self)
-        SavePosition(self, "sealPoint")
-    end)
     sealFrame:SetScript("OnMouseWheel", function(_, delta)
         if not (NS.GetDB and NS.GetDB().locked) then
             local db = NS.GetDB()
             NS.SetSealIconSize((tonumber(db.sealIconSize) or NS.DEFAULT_ICON_SIZE) + (delta > 0 and 4 or -4))
         end
     end)
-    local sealTitle = sealFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    sealTitle:SetPoint("TOPLEFT", 8, -6)
-    sealTitle:SetText(NS.L.SEALS or "Seals")
-    sealFrame.title = sealTitle
+    local sealTimer = sealFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    sealTimer:SetPoint("TOPLEFT", sealFrame, "TOPLEFT", 8, -6)
+    sealTimer:SetWidth(tonumber(NS.GetDB().sealIconSize) or NS.DEFAULT_ICON_SIZE)
+    sealTimer:SetJustifyH("LEFT")
+    sealTimer:SetTextColor(1, 1, 1)
+    sealFrame.title = sealTimer
+    sealFrame.SavePosition = SavePosition
+    CreateMoveHandle(sealFrame, "sealPoint")
     NS.SealFrame = sealFrame
 
-    local manaFrame = CreateFrame("StatusBar", "HenrakMultiToolManaFrame", UIParent, "BackdropTemplate")
+    local manaFrame = CreateFrame("StatusBar", "MultiToolManaFrame", UIParent, "BackdropTemplate")
     manaFrame:SetSize(180, 20)
     manaFrame.background = manaFrame:CreateTexture(nil, "BACKGROUND")
     manaFrame.background:SetAllPoints(manaFrame)
@@ -633,7 +682,7 @@ function NS.CreateTrackerFrame()
     manaFrame.value = manaValue
     NS.ManaFrame = manaFrame
 
-    local expiryWarning = CreateFrame("Frame", "HenrakMultiToolExpiryWarning", UIParent)
+    local expiryWarning = CreateFrame("Frame", "MultiToolExpiryWarning", UIParent)
     expiryWarning:SetSize(1000, 180)
     expiryWarning:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     expiryWarning:SetFrameStrata("HIGH")
@@ -679,7 +728,16 @@ function NS.CreateTrackerFrame()
     NS.BagSlotsButton = bagSlotsButton
 
     local elapsed = 0
+    local sealTimerElapsed = 0
     frame:SetScript("OnUpdate", function(_, dt)
+        local db = NS.GetDB and NS.GetDB()
+        local canMove = db and not db.locked and not (InCombatLockdown and InCombatLockdown())
+        for _, movableFrame in ipairs({ frame, sealFrame }) do
+            local handle = movableFrame.moveHandle
+            if handle then
+                handle:SetShown(canMove and (handle.isMoving or movableFrame:IsMouseOver() or handle:IsMouseOver()))
+            end
+        end
         warningFlashElapsed = warningFlashElapsed + dt
         if warningFlashElapsed >= 0.4 then
             warningFlashElapsed = warningFlashElapsed - 0.4
@@ -690,33 +748,10 @@ function NS.CreateTrackerFrame()
             elapsed = 0
             Update()
         end
-    end)
-
-    frame:RegisterEvent("UNIT_AURA")
-    frame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
-    frame:RegisterEvent("UNIT_POWER_UPDATE")
-    frame:RegisterEvent("UNIT_MAXPOWER")
-    frame:RegisterEvent("UNIT_INVENTORY_CHANGED")
-    frame:RegisterEvent("BAG_UPDATE")
-    frame:RegisterEvent("BAG_UPDATE_DELAYED")
-    frame:RegisterEvent("PLAYER_REGEN_ENABLED")
-    frame:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
-        if event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" then
-            if unit == "player" then UpdateManaBar() end
-        elseif event == "UNIT_SPELLCAST_SUCCEEDED" and unit == "player" then
-            ResetSealTimerAfterCast(spellID)
-        elseif event == "UNIT_AURA" and unit == "player" then
-            if not InCombatLockdown() then
-                Rebuild()
-            end
-            Update()
-            UpdateManaBar()
-        elseif event == "UNIT_INVENTORY_CHANGED" and unit == "player" then
-            if NS.Refresh then NS.Refresh() end
-        elseif event == "BAG_UPDATE" or event == "BAG_UPDATE_DELAYED" then
-            UpdateBagSlots()
-        elseif event == "PLAYER_REGEN_ENABLED" and refreshPending then
-            if NS.Refresh then NS.Refresh() end
+        sealTimerElapsed = sealTimerElapsed + dt
+        if sealTimerElapsed >= 0.2 then
+            sealTimerElapsed = 0
+            RenderSealStatus()
         end
     end)
 
@@ -764,3 +799,31 @@ function NS.RestorePosition()
         NS.ManaFrame:SetPoint("CENTER", 0, -340)
     end
 end
+
+local eventFrame = CreateFrame("Frame")
+NS.EventFrame = eventFrame
+eventFrame:RegisterEvent("UNIT_AURA")
+eventFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
+eventFrame:RegisterEvent("UNIT_POWER_UPDATE")
+eventFrame:RegisterEvent("UNIT_MAXPOWER")
+eventFrame:RegisterEvent("UNIT_INVENTORY_CHANGED")
+eventFrame:RegisterEvent("BAG_UPDATE")
+eventFrame:RegisterEvent("BAG_UPDATE_DELAYED")
+eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
+    if event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" then
+        if unit == "player" then UpdateManaBar() end
+    elseif event == "UNIT_SPELLCAST_SUCCEEDED" and unit == "player" then
+        ResetSealTimerAfterCast(...)
+    elseif event == "UNIT_AURA" and unit == "player" then
+        if not InCombatLockdown() then Rebuild() end
+        Update()
+        UpdateManaBar()
+    elseif event == "UNIT_INVENTORY_CHANGED" and unit == "player" then
+        if NS.Refresh then NS.Refresh() end
+    elseif event == "BAG_UPDATE" or event == "BAG_UPDATE_DELAYED" then
+        UpdateBagSlots()
+    elseif event == "PLAYER_REGEN_ENABLED" and refreshPending then
+        if NS.Refresh then NS.Refresh() end
+    end
+end)

@@ -1,4 +1,4 @@
-local ADDON = "HenrakMultiTool"
+local ADDON = "MultiTool"
 local NS = _G[ADDON] or {}
 _G[ADDON] = NS
 
@@ -7,7 +7,7 @@ if GetLocale() ~= "frFR" then
 end
 
 NS.L = {
-    TITLE = "HenrakMultiTool",
+    TITLE = "MultiTool",
     ENABLE = "Activer le suivi",
     ENABLE_DESC = "Afficher le suivi multi-classe des buffs personnels.",
     DISPLAY = "Affichage",
@@ -16,6 +16,7 @@ NS.L = {
     SHOW_NAMES = "Afficher les noms des buffs",
     LOCK = "Verrouiller la fenêtre",
     LOCK_DESC = "Empêcher le déplacement du suivi.",
+    MOVE_HANDLE_TOOLTIP = "Faire glisser pour déplacer",
     BUFFS = "Buffs à suivre",
     BUFFS_DESC = "Active ou désactive chaque buff à surveiller pour la classe active.",
     ICON_SIZE = "Taille des icônes",
@@ -43,6 +44,9 @@ NS.L = {
     XP_LEVEL = "Niveau %d",
     XP_PROGRESS = "Niveau %d  |  %s / %s XP  |  %s%%",
     XP_RESTED = "XP reposée : %s",
+    XP_BAR_PROJECTION = "Après quêtes : %s XP",
+    XP_QUEST_PROJECTION = "XP des quêtes terminées : %s",
+    XP_AFTER_QUESTS = "Après rendu : %s / %s XP (%s%%)",
     XP_SESSION_TITLE = "Statistiques de session",
     XP_SESSION_GAINED = "XP gagnée : %s",
     XP_SESSION_RATE = "XP par heure : %s",

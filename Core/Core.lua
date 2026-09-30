@@ -1,4 +1,4 @@
-local ADDON = "HenrakMultiTool"
+local ADDON = "MultiTool"
 local NS = _G[ADDON] or {}
 _G[ADDON] = NS
 
@@ -16,17 +16,17 @@ NS.ROW_HEIGHT = 58
 NS.L = NS.L or {}
 
 local function EnsureDB()
-    if type(HenrakMultiToolDB) ~= "table" then
-        if type(PaladinCaernSidheDB) == "table" then
-            HenrakMultiToolDB = PaladinCaernSidheDB
+    if type(MultiToolDB) ~= "table" then
+        if type(LegacyMultiToolDB) == "table" then
+            MultiToolDB = LegacyMultiToolDB
         else
-            HenrakMultiToolDB = {}
+            MultiToolDB = {}
         end
     end
-    if type(PaladinCaernSidheDB) ~= "table" then
-        PaladinCaernSidheDB = HenrakMultiToolDB
+    if type(LegacyMultiToolDB) ~= "table" then
+        LegacyMultiToolDB = MultiToolDB
     end
-    return HenrakMultiToolDB
+    return MultiToolDB
 end
 NS.GetDB = EnsureDB
 
