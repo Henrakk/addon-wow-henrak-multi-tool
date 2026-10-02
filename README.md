@@ -1,6 +1,6 @@
 # MultiTool — WoW Forever
 
-Version 1.0.7
+Version 1.0.11
 
 ## Structure
 
@@ -39,7 +39,7 @@ MultiTool/
 
 ## CurseForge publishing
 
-The GitHub Actions workflow packages and uploads the addon to CurseForge when a version tag is pushed (for example, `v1.0.4`). `Interface-Forever: 16001` marks WoW Forever `1.60.1` compatibility; the base `Interface: 11509` remains the separate client API version.
+The GitHub Actions workflow packages and uploads the addon to CurseForge when a version tag is pushed (for example, `v1.0.4`). Both `Interface: 16001` and `Interface-Forever: 16001` mark compatibility with WoW Forever `1.60.1`; keep them in sync when updating the supported client version.
 
 Configure these values in the GitHub repository under **Settings > Secrets and variables > Actions**:
 

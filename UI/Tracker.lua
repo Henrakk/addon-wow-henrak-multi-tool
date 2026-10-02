@@ -140,9 +140,7 @@ local function GetSealDurationAndExpiration(aura)
 
     local duration = aura.duration
     local expirationTime = aura.expirationTime
-    local readable = duration and expirationTime
-        and (not canaccessvalue or (canaccessvalue(duration) and canaccessvalue(expirationTime)))
-    if not readable then return nil, nil end
+    if not duration or not expirationTime then return nil, nil end
     return duration, expirationTime
 end
 
@@ -163,8 +161,6 @@ local function RenderSealStatus()
         sealState.active = false
         sealState.key = nil
         sealState.expiresAt = nil
-        sealState.castAt = nil
-        sealState.previousExpiresAt = nil
         remaining = nil
     end
 
@@ -172,10 +168,24 @@ local function RenderSealStatus()
         NS.SealFrame.title:SetText(sealState.active and remaining and FormatRemaining(remaining) or "")
     end
 
+    local firstShownButton
+    local matchingButton
+    for _, button in ipairs(sealIcons) do
+        if button:IsShown() and button.buff and button.buff.isSeal then
+            firstShownButton = firstShownButton or button
+            if sealState.active
+                and (button.buff.key == sealState.key or button.buff.isMissingSeal) then
+                matchingButton = button
+                break
+            end
+        end
+    end
+    local timerButton = matchingButton or firstShownButton
+
     for _, button in ipairs(sealIcons) do
         if button:IsShown() and button.buff and button.buff.isSeal then
             local isActive = sealState.active
-                and (button.buff.key == sealState.key or button.buff.isMissingSeal)
+                and (button == timerButton or button.buff.key == sealState.key or button.buff.isMissingSeal)
             button.lastPresent = isActive
             button.lastDuration = sealState.duration
             button.lastRemaining = isActive and remaining or nil
@@ -219,19 +229,18 @@ local function UpdateSealStatus()
         if sealState.key ~= activeSeal.key then
             sealState.duration = nil
             sealState.expiresAt = nil
-            sealState.castAt = nil
-            sealState.previousExpiresAt = nil
         end
         sealState.active = true
         sealState.key = activeSeal.key
         local duration, expirationTime = GetSealDurationAndExpiration(activeAura)
-        if expirationTime and expirationTime > GetTime()
-            and (not sealState.castAt or expirationTime > sealState.castAt)
-            and (not sealState.previousExpiresAt or expirationTime > sealState.previousExpiresAt) then
+        if expirationTime and expirationTime > GetTime() then
+            -- Always trust the live aura data: a fresh cast/recast always
+            -- produces a new expiration further in the future, so there is
+            -- no need to compare against previously stored values before
+            -- accepting it. This guarantees the countdown resumes from the
+            -- full duration as soon as the server confirms the refresh.
             sealState.duration = duration and duration > 0 and duration or sealState.duration
             sealState.expiresAt = expirationTime
-            sealState.castAt = nil
-            sealState.previousExpiresAt = nil
         elseif not sealState.expiresAt then
             sealState.duration = sealState.duration or 30
             sealState.expiresAt = GetTime() + sealState.duration
@@ -241,8 +250,6 @@ local function UpdateSealStatus()
         sealState.key = nil
         sealState.duration = nil
         sealState.expiresAt = nil
-        sealState.castAt = nil
-        sealState.previousExpiresAt = nil
     end
 
     RenderSealStatus()
@@ -253,42 +260,36 @@ local function ResetSealTimerAfterCast(...)
     if #castValues == 0 then return end
 
     for _, seal in ipairs(NS.GetSealBuffs and NS.GetSealBuffs() or {}) do
+        -- Match on the seal's own localized name rather than raw numeric
+        -- spell IDs: IDs can be unreliable to compare across servers
+        -- (this server may not use the same spell ID layout as retail),
+        -- which was causing unrelated casts like Judgement or Exorcism to
+        -- be misidentified as a seal cast and wrongly restart the
+        -- countdown. The localized name is the same identity already used
+        -- (and proven reliable) for buff detection in NS.HasBuff.
+        local sealLabel = seal.labelKey and NS.L[seal.labelKey]
         local matchesSpell = false
-        for _, sealSpellID in ipairs(seal.spellIDs or {}) do
-            local localizedSpellName = NS.SpellName and NS.SpellName(sealSpellID)
+        if sealLabel then
             for _, castValue in ipairs(castValues) do
                 local castSpellID = tonumber(castValue)
-                if castSpellID == sealSpellID
-                    or (localizedSpellName and castValue == localizedSpellName) then
-                    matchesSpell = true
-                    break
-                end
-            end
-            if matchesSpell then break end
-        end
-        if not matchesSpell and NS.GetKnownSpellID then
-            local knownSpellID = NS.GetKnownSpellID(seal)
-            for _, castValue in ipairs(castValues) do
-                if tonumber(castValue) == knownSpellID then
+                local castName = castSpellID and NS.SpellName and NS.SpellName(castSpellID)
+                    or (type(castValue) == "string" and castValue or nil)
+                if castName == sealLabel then
                     matchesSpell = true
                     break
                 end
             end
         end
         if matchesSpell then
-            if sealState.key ~= seal.key then
-                sealState.duration = nil
-                sealState.expiresAt = nil
-                sealState.castAt = nil
-                sealState.previousExpiresAt = nil
-            end
+            -- A successful cast (even of the same seal already active)
+            -- always restarts the countdown from the full duration right
+            -- away; UpdateSealStatus will then reconcile it with the real
+            -- aura expiration as soon as that data is available.
             local now = GetTime()
             sealState.active = true
             sealState.key = seal.key
-            sealState.previousExpiresAt = sealState.expiresAt
             sealState.duration = 30
             sealState.expiresAt = now + sealState.duration
-            sealState.castAt = now
             RenderSealStatus()
             UpdateExpiryAlert(true)
             return
