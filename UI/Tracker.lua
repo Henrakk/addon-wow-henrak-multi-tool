@@ -260,25 +260,27 @@ local function ResetSealTimerAfterCast(...)
     if #castValues == 0 then return end
 
     for _, seal in ipairs(NS.GetSealBuffs and NS.GetSealBuffs() or {}) do
-        -- Match on the seal's own localized name rather than raw numeric
-        -- spell IDs: IDs can be unreliable to compare across servers
-        -- (this server may not use the same spell ID layout as retail),
-        -- which was causing unrelated casts like Judgement or Exorcism to
-        -- be misidentified as a seal cast and wrongly restart the
-        -- countdown. The localized name is the same identity already used
-        -- (and proven reliable) for buff detection in NS.HasBuff.
-        local sealLabel = seal.labelKey and NS.L[seal.labelKey]
+        -- Match against the real in-game spell name(s) for this seal's own
+        -- spellIDs (via NS.SpellName, the same API-backed lookup used
+        -- elsewhere), not our static localization table: the hardcoded
+        -- translation text can differ slightly from what the server
+        -- actually reports (accents, casing, wording), which silently
+        -- broke matching entirely. Raw numeric spell ID comparison is
+        -- intentionally NOT used here anymore, since on this server an ID
+        -- can collide with unrelated spells (e.g. Judgement or Exorcism),
+        -- which previously caused false seal-cast detections.
         local matchesSpell = false
-        if sealLabel then
-            for _, castValue in ipairs(castValues) do
-                local castSpellID = tonumber(castValue)
-                local castName = castSpellID and NS.SpellName and NS.SpellName(castSpellID)
-                    or (type(castValue) == "string" and castValue or nil)
-                if castName == sealLabel then
-                    matchesSpell = true
-                    break
+        for _, sealSpellID in ipairs(seal.spellIDs or {}) do
+            local sealSpellName = NS.SpellName and NS.SpellName(sealSpellID)
+            if sealSpellName then
+                for _, castValue in ipairs(castValues) do
+                    if type(castValue) == "string" and castValue == sealSpellName then
+                        matchesSpell = true
+                        break
+                    end
                 end
             end
+            if matchesSpell then break end
         end
         if matchesSpell then
             -- A successful cast (even of the same seal already active)
@@ -386,15 +388,18 @@ local function Update()
         return
     end
     UpdateSealStatus()
+    -- Reading aura presence (NS.HasBuff) and updating plain visual state
+    -- (alpha, desaturation, text) is safe during combat lockdown; only
+    -- changing secure attributes (done exclusively in Rebuild()) is
+    -- restricted. So, unlike before, buff presence/timers keep refreshing
+    -- live in combat instead of freezing until combat ends.
     if InCombatLockdown and InCombatLockdown() then
         refreshPending = true
-        UpdateExpiryAlert(true)
-        return
     end
 
     NS.Frame:Show()
-    if NS.GetActiveClass() == "PALADIN" and not InCombatLockdown() then
-        lastPaladinAuraPresent = false
+    lastPaladinAuraPresent = false
+    if NS.GetActiveClass() == "PALADIN" then
         for _, aura in ipairs(NS.PaladinAuras or {}) do
             if NS.HasBuff(aura) then
                 lastPaladinAuraPresent = true
@@ -421,45 +426,27 @@ local function Update()
     }
     for _, b in ipairs(iconList) do
         if b:IsShown() and b.buff and b.buff.groupKey then
-            local present
-            if InCombatLockdown() then
-                present = b.lastPresent
-            else
-                present = NS.HasBuff(b.buff)
-            end
-            if present then groupPresent[b.buff.groupKey] = true end
+            if NS.HasBuff(b.buff) then groupPresent[b.buff.groupKey] = true end
         end
     end
     for i, b in ipairs(iconList) do
         if b:IsShown() and b.buff then
-            local present, aura
-            if not InCombatLockdown() then
-                present, aura = NS.HasBuff(b.buff)
-                b.lastPresent = present == true
-                b.lastAura = aura
-                b.lastRemaining = nil
-                b.lastDuration = nil
-                b.lastRemainingAt = nil
-                if present and aura then
-                    local duration = aura.duration
-                    local expirationTime = aura.expirationTime
-                    local readable = duration and expirationTime
-                        and (not canaccessvalue or (canaccessvalue(duration) and canaccessvalue(expirationTime)))
-                    if readable then
-                        if duration > 0 then b.lastDuration = duration end
-                        local remaining = expirationTime - GetTime()
-                        if remaining > 0 then
-                            b.lastRemaining = remaining
-                            b.lastRemainingAt = GetTime()
-                        end
+            local present, aura = NS.HasBuff(b.buff)
+            b.lastPresent = present == true
+            b.lastAura = aura
+            b.lastRemaining = nil
+            b.lastDuration = nil
+            b.lastRemainingAt = nil
+            if present and aura then
+                local duration = aura.duration
+                local expirationTime = aura.expirationTime
+                if duration and expirationTime then
+                    if duration > 0 then b.lastDuration = duration end
+                    local remaining = expirationTime - GetTime()
+                    if remaining > 0 then
+                        b.lastRemaining = remaining
+                        b.lastRemainingAt = GetTime()
                     end
-                end
-            else
-                present = b.lastPresent
-                aura = b.lastAura
-                if b.lastRemaining and b.lastRemainingAt then
-                    b.lastRemaining = b.lastRemaining - (GetTime() - b.lastRemainingAt)
-                    b.lastRemainingAt = GetTime()
                 end
             end
             if present then
@@ -510,7 +497,7 @@ local function Update()
     end
     end
     UpdateGroup(icons)
-    UpdateExpiryAlert(false)
+    UpdateExpiryAlert(InCombatLockdown and InCombatLockdown() or false)
 end
 
 function NS.Refresh()

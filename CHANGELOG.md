@@ -1,10 +1,21 @@
 # MultiTool
 
-## v1.0.11 (2026-10-02)
+## [v1.0.12](https://github.com/Henrakk/addon-wow-henrak-multi-tool/tree/v1.0.12) (2026-10-02)
+[Full Changelog](https://github.com/Henrakk/addon-wow-henrak-multi-tool/compare/v1.0.11...v1.0.12) 
 
-- Update the standard TOC interface version to `16001` so WoW Forever `1.60.1` no longer marks the addon as out of date.
-- Fix the seal countdown not resuming from the full duration when recasting a seal (including recasting the same seal already active): removed fragile comparisons that could prevent the timer from resyncing with the refreshed aura, so it now always restarts immediately on a successful cast and reconciles with the server's real expiration as soon as it's available.
-- Fix the seal countdown wrongly restarting when casting Judgement or Exorcism: the cast-detection was matching on raw numeric spell IDs, which could misidentify unrelated spells as a seal cast on this server. It now matches on the seal's own localized name instead, the same reliable identity already used for seal buff detection.
+- v1.0.12: fix seal detection regression and buffs freezing in combat  
+    - Fix the seal countdown not resetting at all when recasting a seal, a regression from v1.0.11: cast detection was matching against the static localized text instead of the live spell name returned by the game, so it almost never matched. It now matches against the seal's own real in-game spell name, keeping the previous fix that avoids false resets from Judgement or Exorcism.  
+    - Fix regular buff icons (e.g. Blessing of Wisdom) staying frozen in their pre-combat state instead of updating while in combat. Buff presence and timers now keep refreshing live during combat, since only changing secure click-cast attributes (unrelated to this) is actually restricted in combat.  
+    Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>  
+
+## [v1.0.11](https://github.com/Henrakk/addon-wow-henrak-multi-tool/tree/v1.0.11) (2026-10-02)
+[Full Changelog](https://github.com/Henrakk/addon-wow-henrak-multi-tool/compare/v1.0.10...v1.0.11) 
+
+- v1.0.11: fix interface version and seal countdown reset  
+    - Update the standard TOC interface version to 16001 so WoW Forever 1.60.1 no longer marks the addon as out of date.  
+    - Fix the seal countdown not resuming from the full duration when recasting a seal, by removing fragile stored-state comparisons that could block the resync with the refreshed aura.  
+    - Fix the seal countdown wrongly restarting when casting Judgement or Exorcism: cast detection now matches on the seal's localized name instead of raw spell IDs, which could misidentify unrelated spells.  
+    Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>  
 
 ## v1.0.10 (2026-09-30)
 
