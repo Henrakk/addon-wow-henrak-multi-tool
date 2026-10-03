@@ -179,11 +179,13 @@ SlashCmdList.MULTITOOL = function(msg)
         print("|cff70d5ffMultiTool|r: auto class enabled")
     elseif cmd == "questxp" then
         if NS.DebugQuestXP then NS.DebugQuestXP() end
+    elseif cmd == "seal" then
+        if NS.DebugSeal then NS.DebugSeal() end
     else
         if Settings and Settings.OpenToCategory and NS.SettingsCategory then
             Settings.OpenToCategory(NS.SettingsCategory:GetID())
         else
-            print("|cff70d5ffMultiTool|r: /mtool class <CLASS>, /mtool size <N>, /mtool auto, /mtool lock, /mtool unlock, /mtool reset, /mtool questxp")
+            print("|cff70d5ffMultiTool|r: /mtool class <CLASS>, /mtool size <N>, /mtool auto, /mtool lock, /mtool unlock, /mtool reset, /mtool questxp, /mtool seal")
         end
     end
 end

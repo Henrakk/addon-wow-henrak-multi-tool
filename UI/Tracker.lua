@@ -2,13 +2,45 @@ local ADDON = "MultiTool"
 local NS = _G[ADDON] or {}
 _G[ADDON] = NS
 
+-- Combat rules followed by this file:
+--  * Reading auras and updating purely visual state (SetAlpha, SetDesaturated,
+--    SetTexture, FontString text/visibility) is allowed in combat.
+--  * The icon buttons are secure frames, and so are the frames that parent
+--    them: Show/Hide/SetPoint/SetSize/SetHeight/SetAttribute on any of them is
+--    blocked in combat. That work only happens out of combat (Rebuild() and
+--    the frame sizing in RenderStatusLine()); when something changed during
+--    combat, refreshPending is set and NS.Refresh() runs on PLAYER_REGEN_ENABLED.
+--  * Aura fields can be unreadable ("secret") in combat. All reads go through
+--    NS.CanRead / NS.GetAuraTiming, and when aura data is hidden we keep
+--    displaying the last known state instead of guessing.
+
+local SEAL_DEFAULT_DURATION = 30
+local SEAL_RECAST_GRACE = 2
+local EXPIRY_WARNING_RATIO = 0.05
+
 local icons = {}
 local sealIcons = {}
-local lastPaladinAuraPresent = false
+local sealTimers = {}
+local paladinAuraPresent = false
 local refreshPending = false
 local warningFlashOn = false
 local warningFlashElapsed = 0
-local sealState = { active = false }
+local reportedErrors = {}
+
+local function InCombat()
+    return InCombatLockdown ~= nil and InCombatLockdown() and true or false
+end
+
+-- Runs fn so that one failing component cannot freeze the whole tracker;
+-- each distinct failure is reported once instead of spamming the chat.
+local function Guarded(label, fn, ...)
+    local ok, err = pcall(fn, ...)
+    if not ok and not reportedErrors[label] then
+        reportedErrors[label] = true
+        print("|cff70d5ffMultiTool|r: error in " .. label .. ": " .. tostring(err))
+    end
+    return ok
+end
 
 local function UpdateManaBar()
     if not NS.ManaFrame or not NS.GetPlayerClassKey then return end
@@ -58,7 +90,29 @@ local function UpdateBagSlots()
     button.totalSlots = totalSlots
 end
 
-local function UpdateExpiryAlert(inCombat)
+local function FormatRemaining(remaining)
+    local secondsLeft = math.max(1, math.floor(remaining))
+    if secondsLeft >= 60 then
+        return string.format("%dm %ds", math.floor(secondsLeft / 60), secondsLeft % 60)
+    end
+    return string.format("%ds", secondsLeft)
+end
+
+local function SetButtonTimer(button, remaining)
+    if remaining and remaining > 0 and remaining < 3600 then
+        button.timer:SetText(FormatRemaining(remaining))
+        button.timer:Show()
+    else
+        button.timer:Hide()
+    end
+end
+
+local function SetButtonPresence(button, present)
+    button:SetAlpha(present and 1 or 0.45)
+    button.icon:SetDesaturated(not present)
+end
+
+local function UpdateExpiryAlert()
     local warning = NS.ExpiryWarning
     if not warning then return end
 
@@ -72,14 +126,15 @@ local function UpdateExpiryAlert(inCombat)
     local lines = {}
     local function CheckGroup(iconList)
         for _, button in ipairs(iconList) do
+            local isSeal = button.buff and button.buff.isSeal
             local remaining
-            if button:IsShown() and button.buff and button.lastPresent
-                and button.lastDuration and button.lastRemaining and button.lastRemainingAt then
-                remaining = button.lastRemaining - (now - button.lastRemainingAt)
+            if button:IsShown() and button.buff and button.present
+                and button.duration and button.expiresAt then
+                remaining = button.expiresAt - now
             end
 
             local expiring = remaining and remaining > 0
-                and remaining <= button.lastDuration * 0.05
+                and remaining <= button.duration * EXPIRY_WARNING_RATIO
             if expiring then
                 local label = NS.L[button.buff.labelKey] or button.buff.key or "Buff"
                 table.insert(lines, string.format(
@@ -89,20 +144,8 @@ local function UpdateExpiryAlert(inCombat)
                 ))
             end
 
-            if button.timer and not (button.buff and button.buff.isSeal)
-                and remaining and remaining > 0 and remaining < 3600 then
-                if inCombat then
-                    if remaining > 60 then
-                        button.timer:SetText(string.format("%dm %ds", math.floor(remaining / 60), math.floor(remaining % 60)))
-                    else
-                        button.timer:SetText(string.format("%ds", math.floor(remaining + 0.5)))
-                    end
-                    button.timer:Show()
-                end
-            end
-
             if button.glow then
-                if button.buff and button.buff.isSeal and expiring then
+                if isSeal and expiring then
                     button.glow:SetAlpha(warningFlashOn and 1 or 0.25)
                     button.glow:Show()
                     if button.timer then
@@ -114,7 +157,7 @@ local function UpdateExpiryAlert(inCombat)
                     end
                 else
                     button.glow:Hide()
-                    if button.buff and button.buff.isSeal and button.timer then
+                    if isSeal and button.timer then
                         button.timer:SetTextColor(1, 1, 1)
                     end
                 end
@@ -135,172 +178,343 @@ local function UpdateExpiryAlert(inCombat)
     warning:Show()
 end
 
-local function GetSealDurationAndExpiration(aura)
-    if not aura then return nil, nil end
+-- Seals ----------------------------------------------------------------------
+-- sealTimers[key] = { seal, order, duration, expiresAt, castAt, previousExpiresAt }
+-- One entry per active seal. The live aura is the source of truth; the cast
+-- event only restarts the countdown immediately, until the refreshed aura
+-- (always expiring later than before the recast) is seen.
 
-    local duration = aura.duration
-    local expirationTime = aura.expirationTime
-    if not duration or not expirationTime then return nil, nil end
-    return duration, expirationTime
+local function CastMatchesSeal(seal, castValues)
+    for _, sealSpellID in ipairs(seal.spellIDs or {}) do
+        local sealName = NS.SpellName(sealSpellID)
+        for _, castValue in ipairs(castValues) do
+            if NS.CanRead(castValue)
+                and (tonumber(castValue) == sealSpellID or castValue == sealName) then
+                return true
+            end
+        end
+    end
+    return false
 end
 
-local function FormatRemaining(remaining)
-    local secondsLeft = math.max(1, math.floor(remaining))
-    if secondsLeft >= 60 then
-        return string.format("%dm %ds", math.floor(secondsLeft / 60), secondsLeft % 60)
+local function CollectActiveSeals(now)
+    local list = {}
+    for key, timer in pairs(sealTimers) do
+        if timer.expiresAt and timer.expiresAt <= now then
+            sealTimers[key] = nil
+        else
+            list[#list + 1] = timer
+        end
     end
-    return string.format("%ds", secondsLeft)
+    table.sort(list, function(a, b) return a.order < b.order end)
+    return list
+end
+
+local function ShowButtonSeal(button, seal)
+    if button.displayKey == seal.key then return end
+    button.displayKey = seal.key
+    local spellID = seal.activeSpellID or NS.GetKnownSpellID(seal) or (seal.spellIDs and seal.spellIDs[1])
+    button.icon:SetTexture(NS.SpellTexture(spellID))
 end
 
 local function RenderSealStatus()
     if not NS.SealFrame then return end
 
     local now = GetTime()
-    local remaining = sealState.expiresAt and sealState.expiresAt - now
-    if remaining and remaining <= 0 then
-        sealState.active = false
-        sealState.key = nil
-        sealState.expiresAt = nil
-        remaining = nil
-    end
+    local active = CollectActiveSeals(now)
 
     if NS.SealFrame.title then
-        NS.SealFrame.title:SetText(sealState.active and remaining and FormatRemaining(remaining) or "")
+        local primary = active[1]
+        local remaining = primary and primary.expiresAt and primary.expiresAt - now
+        NS.SealFrame.title:SetText(remaining and FormatRemaining(remaining) or "")
     end
 
-    local firstShownButton
-    local matchingButton
+    local buttons = {}
     for _, button in ipairs(sealIcons) do
         if button:IsShown() and button.buff and button.buff.isSeal then
-            firstShownButton = firstShownButton or button
-            if sealState.active
-                and (button.buff.key == sealState.key or button.buff.isMissingSeal) then
-                matchingButton = button
+            buttons[#buttons + 1] = button
+        end
+    end
+
+    -- Buttons are built out of combat for the seals active at that time. If the
+    -- seal changed since (e.g. cast in combat), the button of a seal that is no
+    -- longer active shows the seal that is.
+    local assigned, used = {}, {}
+    for _, button in ipairs(buttons) do
+        for _, timer in ipairs(active) do
+            if not used[timer] and timer.seal.key == button.buff.key then
+                assigned[button] = timer
+                used[timer] = true
                 break
             end
         end
     end
-    local timerButton = matchingButton or firstShownButton
+    for _, button in ipairs(buttons) do
+        if not assigned[button] then
+            for _, timer in ipairs(active) do
+                if not used[timer] then
+                    assigned[button] = timer
+                    used[timer] = true
+                    break
+                end
+            end
+        end
+    end
 
-    for _, button in ipairs(sealIcons) do
-        if button:IsShown() and button.buff and button.buff.isSeal then
-            local isActive = sealState.active
-                and (button == timerButton or button.buff.key == sealState.key or button.buff.isMissingSeal)
-            button.lastPresent = isActive
-            button.lastDuration = sealState.duration
-            button.lastRemaining = isActive and remaining or nil
-            button.lastRemainingAt = now
+    for _, button in ipairs(buttons) do
+        local timer = assigned[button]
+        if timer then
+            ShowButtonSeal(button, timer.seal)
+            button.present, button.duration, button.expiresAt = true, timer.duration, timer.expiresAt
+            SetButtonPresence(button, true)
+            button.missing:Hide()
+            SetButtonTimer(button, timer.expiresAt and timer.expiresAt - now)
+        else
+            ShowButtonSeal(button, button.buff)
+            button.present, button.duration, button.expiresAt = false, nil, nil
+            SetButtonPresence(button, false)
+            button.timer:Hide()
+            button.missing:Hide()
+        end
+    end
+end
 
-            if isActive then
-                button:SetAlpha(1)
-                button.icon:SetDesaturated(false)
-                button.missing:Hide()
-                if remaining and button.timer then
-                    button.timer:SetText(FormatRemaining(remaining))
-                    button.timer:Show()
-                elseif button.timer then
-                    button.timer:Hide()
+local function UpdateSealStates()
+    if not NS.GetSealBuffs then return end
+    if InCombat() and not NS.AuraDataReadable() then return end
+
+    local now = GetTime()
+    for index, seal in ipairs(NS.GetSealBuffs()) do
+        local present, aura = NS.HasBuff(seal)
+        local timer = sealTimers[seal.key]
+        local inGrace = timer and timer.castAt and now - timer.castAt < SEAL_RECAST_GRACE
+
+        if present then
+            if not timer then
+                timer = {}
+                sealTimers[seal.key] = timer
+            end
+            timer.seal, timer.order = seal, index
+
+            local readable, duration, expiration = NS.GetAuraTiming(aura)
+            if readable and expiration then
+                if expiration > now and (not inGrace or expiration > (timer.previousExpiresAt or 0)) then
+                    timer.duration, timer.expiresAt = duration, expiration
+                    timer.castAt, timer.previousExpiresAt = nil, nil
+                end
+            elseif readable then
+                -- Aura without expiration: active, but nothing to count down.
+                if not inGrace then timer.duration, timer.expiresAt = nil, nil end
+            elseif not timer.expiresAt then
+                timer.duration = timer.duration or SEAL_DEFAULT_DURATION
+                timer.expiresAt = now + timer.duration
+            end
+        elseif timer and not inGrace then
+            sealTimers[seal.key] = nil
+        end
+    end
+end
+
+-- Regular buffs -----------------------------------------------------------------
+
+local function UpdateBuffStates()
+    if InCombat() and not NS.AuraDataReadable() then return end
+
+    for _, button in ipairs(icons) do
+        if button:IsShown() and button.buff then
+            local present, aura = NS.HasBuff(button.buff)
+            button.present = present == true
+            if present then
+                local readable, duration, expiration = NS.GetAuraTiming(aura)
+                if readable then
+                    button.duration, button.expiresAt = duration, expiration
                 end
             else
-                button:SetAlpha(0.45)
-                button.icon:SetDesaturated(true)
-                if button.timer then button.timer:Hide() end
-                button.missing:Hide()
+                button.duration, button.expiresAt = nil, nil
             end
         end
     end
 end
 
-local function UpdateSealStatus()
-    if not NS.GetSealBuffs then return end
+local function UpdatePaladinAura()
+    if NS.GetActiveClass() ~= "PALADIN" then
+        paladinAuraPresent = false
+        return
+    end
+    if InCombat() and not NS.AuraDataReadable() then return end
 
-    local inCombat = InCombatLockdown and InCombatLockdown()
-    local activeSeal, activeAura
-    for _, seal in ipairs(NS.GetSealBuffs()) do
-        local present, aura = NS.HasBuff(seal)
-        if present then
-            activeSeal = seal
-            activeAura = aura
+    paladinAuraPresent = false
+    for _, aura in ipairs(NS.PaladinAuras or {}) do
+        if NS.HasBuff(aura) then
+            paladinAuraPresent = true
             break
         end
     end
+end
 
-    if activeSeal then
-        if sealState.key ~= activeSeal.key then
-            sealState.duration = nil
-            sealState.expiresAt = nil
+local GROUP_MISSING_KEYS = {
+    blessing = "BLESSING_MISSING",
+    aura = "AURA_MISSING",
+}
+
+local function RenderBuffIcons(db, now)
+    local groupPresent = {}
+    for _, button in ipairs(icons) do
+        if button:IsShown() and button.buff and button.buff.groupKey and button.present then
+            groupPresent[button.buff.groupKey] = true
         end
-        sealState.active = true
-        sealState.key = activeSeal.key
-        local duration, expirationTime = GetSealDurationAndExpiration(activeAura)
-        if expirationTime and expirationTime > GetTime() then
-            -- Always trust the live aura data: a fresh cast/recast always
-            -- produces a new expiration further in the future, so there is
-            -- no need to compare against previously stored values before
-            -- accepting it. This guarantees the countdown resumes from the
-            -- full duration as soon as the server confirms the refresh.
-            sealState.duration = duration and duration > 0 and duration or sealState.duration
-            sealState.expiresAt = expirationTime
-        elseif not sealState.expiresAt then
-            sealState.duration = sealState.duration or 30
-            sealState.expiresAt = GetTime() + sealState.duration
-        end
-    elseif not inCombat or not sealState.expiresAt or sealState.expiresAt <= GetTime() then
-        sealState.active = false
-        sealState.key = nil
-        sealState.duration = nil
-        sealState.expiresAt = nil
     end
 
-    RenderSealStatus()
+    local groupAlertShown = {}
+    for _, button in ipairs(icons) do
+        if button:IsShown() and button.buff then
+            if button.present then
+                SetButtonPresence(button, true)
+                button.missing:Hide()
+                SetButtonTimer(button, button.expiresAt and button.expiresAt - now)
+            else
+                SetButtonPresence(button, false)
+                button.timer:Hide()
+                if db.showMissingText then
+                    local buff = button.buff
+                    local label = NS.L[buff.labelKey] or NS.SpellName(buff.spellIDs[1])
+                    local groupKey = buff.groupKey
+                    if groupKey then
+                        if groupPresent[groupKey] or groupAlertShown[groupKey] then
+                            button.missing:Hide()
+                        else
+                            button.missing:SetText(NS.L[GROUP_MISSING_KEYS[groupKey]] or label)
+                            button.missing:Show()
+                            groupAlertShown[groupKey] = true
+                        end
+                    else
+                        button.missing:SetText(label .. " " .. (NS.L.MISSING or "missing"))
+                        button.missing:Show()
+                    end
+                else
+                    button.missing:Hide()
+                end
+            end
+        end
+    end
+end
+
+local function RenderStatusLine(db)
+    local frame = NS.Frame
+    local status = frame and frame.status
+    if not status then return end
+
+    local missing = db.showMissingText and NS.GetActiveClass() == "PALADIN" and not paladinAuraPresent
+    if missing then
+        status:SetText(NS.L.AURA_MISSING or "No aura")
+        status:Show()
+    else
+        status:Hide()
+    end
+
+    -- Resizing the frame is protected (it parents secure buttons).
+    if not InCombat() then
+        local height = frame.baseHeight or frame:GetHeight()
+        if missing then
+            height = height + (tonumber(db.missingTextSize) or NS.DEFAULT_MISSING_TEXT_SIZE) + 8
+        end
+        if math.abs(frame:GetHeight() - height) > 0.01 then
+            frame:SetHeight(height)
+        end
+    end
+end
+
+-- Draws the current state; no aura reads, so it is cheap enough to run often.
+local function Render()
+    local db = NS.GetDB and NS.GetDB()
+    if not db or not db.enabled or not NS.Frame then return end
+
+    Guarded("render buffs", RenderBuffIcons, db, GetTime())
+    Guarded("render seals", RenderSealStatus)
+    Guarded("render status", RenderStatusLine, db)
+    Guarded("render expiry alert", UpdateExpiryAlert)
 end
 
 local function ResetSealTimerAfterCast(...)
-    local castValues = {...}
-    if #castValues == 0 then return end
+    local castValues = { ... }
+    if #castValues == 0 or not NS.GetSealBuffs then return end
 
-    for _, seal in ipairs(NS.GetSealBuffs and NS.GetSealBuffs() or {}) do
-        -- Match against the real in-game spell name(s) for this seal's own
-        -- spellIDs (via NS.SpellName, the same API-backed lookup used
-        -- elsewhere), not our static localization table: the hardcoded
-        -- translation text can differ slightly from what the server
-        -- actually reports (accents, casing, wording), which silently
-        -- broke matching entirely. Raw numeric spell ID comparison is
-        -- intentionally NOT used here anymore, since on this server an ID
-        -- can collide with unrelated spells (e.g. Judgement or Exorcism),
-        -- which previously caused false seal-cast detections.
-        local matchesSpell = false
-        for _, sealSpellID in ipairs(seal.spellIDs or {}) do
-            local sealSpellName = NS.SpellName and NS.SpellName(sealSpellID)
-            if sealSpellName then
-                for _, castValue in ipairs(castValues) do
-                    if type(castValue) == "string" and castValue == sealSpellName then
-                        matchesSpell = true
-                        break
-                    end
-                end
-            end
-            if matchesSpell then break end
-        end
-        if matchesSpell then
-            -- A successful cast (even of the same seal already active)
-            -- always restarts the countdown from the full duration right
-            -- away; UpdateSealStatus will then reconcile it with the real
-            -- aura expiration as soon as that data is available.
+    for index, seal in ipairs(NS.GetSealBuffs()) do
+        if CastMatchesSeal(seal, castValues) then
             local now = GetTime()
-            sealState.active = true
-            sealState.key = seal.key
-            sealState.duration = 30
-            sealState.expiresAt = now + sealState.duration
-            RenderSealStatus()
-            UpdateExpiryAlert(true)
+            local timer = sealTimers[seal.key]
+            if not timer then
+                timer = {}
+                sealTimers[seal.key] = timer
+            end
+            timer.seal, timer.order = seal, index
+            timer.previousExpiresAt = timer.expiresAt
+            timer.castAt = now
+            timer.duration = timer.duration or SEAL_DEFAULT_DURATION
+            timer.expiresAt = now + timer.duration
+            Render()
             return
         end
     end
 end
 
+function NS.DebugSeal()
+    local function say(text) print("|cff70d5ffMultiTool|r " .. text) end
+    local function show(value)
+        if NS.CanRead(value) then return tostring(value) end
+        return "<secret>"
+    end
+
+    local class = NS.GetActiveClass()
+    say(string.format("seal debug: class=%s inCombat=%s auraDataReadable=%s",
+        class, tostring(InCombat()), tostring(NS.AuraDataReadable())))
+
+    for _, buff in ipairs(NS.ClassBuffs[class] or {}) do
+        if buff.isSeal then
+            local present, aura = NS.HasBuff(buff)
+            say(string.format("  %s: known=%s present=%s ids=%s name=%s",
+                buff.key, tostring(NS.GetKnownSpellID(buff)), tostring(present),
+                table.concat(buff.spellIDs, ","), tostring(NS.SpellName(buff.spellIDs[1]))))
+            if present and aura then
+                say(string.format("    aura: name=%s id=%s duration=%s expires=%s",
+                    show(aura.name), show(aura.spellId or aura.spellID), show(aura.duration), show(aura.expirationTime)))
+            end
+        end
+    end
+
+    local now = GetTime()
+    for key, timer in pairs(sealTimers) do
+        say(string.format("  timer %s: remaining=%s duration=%s", key,
+            tostring(timer.expiresAt and timer.expiresAt - now), tostring(timer.duration)))
+    end
+
+    say("  player buffs:")
+    local byIndex = C_UnitAuras and C_UnitAuras.GetAuraDataByIndex
+    for i = 1, 40 do
+        local name, spellID, duration, expiration
+        if byIndex then
+            local ok, aura = pcall(byIndex, "player", i, "HELPFUL")
+            if not ok or not aura then break end
+            name, spellID = aura.name, aura.spellId or aura.spellID
+            duration, expiration = aura.duration, aura.expirationTime
+        elseif UnitAura then
+            local auraName, _, _, _, auraDuration, auraExpiration, _, _, _, auraSpellID = UnitAura("player", i, "HELPFUL")
+            if not auraName then break end
+            name, spellID, duration, expiration = auraName, auraSpellID, auraDuration, auraExpiration
+        else
+            break
+        end
+        say(string.format("    [%d] %s id=%s duration=%s expires=%s",
+            i, show(name), show(spellID), show(duration), show(expiration)))
+    end
+end
+
 local function Rebuild()
     if not NS.Frame or not NS.SealFrame or not NS.GetDB then return end
+    if InCombat() then
+        refreshPending = true
+        return
+    end
     local db = NS.GetDB()
     if not db then return end
 
@@ -316,7 +530,6 @@ local function Rebuild()
     local sealSize = tonumber(db.sealIconSize) or db.iconSize
     local missingTextSize = tonumber(db.missingTextSize) or NS.DEFAULT_MISSING_TEXT_SIZE
     local timerTextSize = tonumber(db.timerTextSize) or NS.DEFAULT_TIMER_TEXT_SIZE
-    local width = math.max(180, #active * (db.iconSize + NS.SPACING) + 16, #sealActive * (sealSize + NS.SPACING) + 16)
     local rowHeight = math.max(db.iconSize, sealSize) + (db.showMissingText and math.max(34, missingTextSize + 22) or 18)
     NS.Frame:SetSize(math.max(180, #active * (db.iconSize + NS.SPACING) + 16), rowHeight)
     NS.Frame.baseHeight = rowHeight
@@ -331,7 +544,7 @@ local function Rebuild()
     NS.SealFrame:SetSize(math.max(180, #sealActive * (sealSize + NS.SPACING) + 16), rowHeight)
     NS.SealFrame:SetShown(#sealActive > 0)
 
-    local function BuildGroup(buffList, iconList, size, yOffset, positionKey)
+    local function BuildGroup(buffList, iconList, size, yOffset)
         for i, buff in ipairs(buffList) do
             local parent = buff.isSeal and NS.SealFrame or NS.Frame
             local b = iconList[i] or NS.CreateBuffIcon(parent, i)
@@ -347,26 +560,27 @@ local function Rebuild()
             b:EnableMouse(true)
             b:EnableMouseWheel(false)
             b:Show()
+            if not b.buff or b.buff.key ~= buff.key then
+                b.present, b.duration, b.expiresAt = false, nil, nil
+            end
             b.buff = buff
-            b.lastPresent = b.lastPresent == true
             local spellID = buff.activeSpellID or NS.GetKnownSpellID(buff) or (buff.spellIDs and buff.spellIDs[1])
             b.icon:SetTexture(NS.SpellTexture(spellID))
-            if not InCombatLockdown() then
-                if spellID and not buff.isMissingSeal then
-                    b:SetAttribute("type", "spell")
-                    b:SetAttribute("spell", spellID)
-                else
-                    b:SetAttribute("type", nil)
-                    b:SetAttribute("spell", nil)
-                end
+            b.displayKey = buff.key
+            if spellID and not buff.isMissingSeal then
+                b:SetAttribute("type", "spell")
+                b:SetAttribute("spell", spellID)
+            else
+                b:SetAttribute("type", nil)
+                b:SetAttribute("spell", nil)
             end
             iconList[i] = b
         end
     end
 
-    BuildGroup(active, icons, db.iconSize, -6, "point")
+    BuildGroup(active, icons, db.iconSize, -6)
     if #sealActive > 0 then
-        BuildGroup(sealActive, sealIcons, sealSize, -22, "sealPoint")
+        BuildGroup(sealActive, sealIcons, sealSize, -22)
     end
 
     for i = #active + 1, #icons do
@@ -377,131 +591,33 @@ local function Rebuild()
     end
 end
 
+-- Polls the auras, then draws. Safe to call in combat (see rules at the top).
 local function Update()
     if not NS.Frame or not NS.SealFrame or not NS.GetDB then return end
     local db = NS.GetDB()
     if not db then return end
+
+    local inCombat = InCombat()
+    if inCombat then refreshPending = true end
+
     if not db.enabled then
-        NS.Frame:Hide()
-        NS.SealFrame:Hide()
+        if not inCombat then
+            NS.Frame:Hide()
+            NS.SealFrame:Hide()
+        end
         if NS.ExpiryWarning then NS.ExpiryWarning:Hide() end
         return
     end
-    UpdateSealStatus()
-    -- Reading aura presence (NS.HasBuff) and updating plain visual state
-    -- (alpha, desaturation, text) is safe during combat lockdown; only
-    -- changing secure attributes (done exclusively in Rebuild()) is
-    -- restricted. So, unlike before, buff presence/timers keep refreshing
-    -- live in combat instead of freezing until combat ends.
-    if InCombatLockdown and InCombatLockdown() then
-        refreshPending = true
-    end
+    if not inCombat then NS.Frame:Show() end
 
-    NS.Frame:Show()
-    lastPaladinAuraPresent = false
-    if NS.GetActiveClass() == "PALADIN" then
-        for _, aura in ipairs(NS.PaladinAuras or {}) do
-            if NS.HasBuff(aura) then
-                lastPaladinAuraPresent = true
-                break
-            end
-        end
-    end
-    if NS.Frame.status then
-        if db.showMissingText and NS.GetActiveClass() == "PALADIN" and not lastPaladinAuraPresent then
-            NS.Frame.status:SetText(NS.L.AURA_MISSING or "No aura")
-            NS.Frame.status:Show()
-            NS.Frame:SetHeight((NS.Frame.baseHeight or NS.Frame:GetHeight()) + (tonumber(db.missingTextSize) or NS.DEFAULT_MISSING_TEXT_SIZE) + 8)
-        else
-            NS.Frame.status:Hide()
-            NS.Frame:SetHeight(NS.Frame.baseHeight or NS.Frame:GetHeight())
-        end
-    end
-    local function UpdateGroup(iconList)
-    local groupPresent = {}
-    local groupAlertShown = {}
-    local groupLabelKeys = {
-        blessing = "BLESSING_MISSING",
-        aura = "AURA_MISSING",
-    }
-    for _, b in ipairs(iconList) do
-        if b:IsShown() and b.buff and b.buff.groupKey then
-            if NS.HasBuff(b.buff) then groupPresent[b.buff.groupKey] = true end
-        end
-    end
-    for i, b in ipairs(iconList) do
-        if b:IsShown() and b.buff then
-            local present, aura = NS.HasBuff(b.buff)
-            b.lastPresent = present == true
-            b.lastAura = aura
-            b.lastRemaining = nil
-            b.lastDuration = nil
-            b.lastRemainingAt = nil
-            if present and aura then
-                local duration = aura.duration
-                local expirationTime = aura.expirationTime
-                if duration and expirationTime then
-                    if duration > 0 then b.lastDuration = duration end
-                    local remaining = expirationTime - GetTime()
-                    if remaining > 0 then
-                        b.lastRemaining = remaining
-                        b.lastRemainingAt = GetTime()
-                    end
-                end
-            end
-            if present then
-                b:SetAlpha(1)
-                b.icon:SetDesaturated(false)
-                b.missing:Hide()
-                if b.lastRemaining and b.lastRemaining > 0 then
-                    local remaining = b.lastRemaining
-                    if remaining > 0 and remaining < 3600 then
-                        if remaining > 60 then
-                            local minutes = math.floor(remaining / 60)
-                            local seconds = math.floor(remaining % 60)
-                            b.timer:SetText(string.format("%dm %ds", minutes, seconds))
-                        else
-                            b.timer:SetText(string.format("%ds", math.floor(remaining + 0.5)))
-                        end
-                        b.timer:Show()
-                    else
-                        b.timer:Hide()
-                    end
-                else
-                    b.timer:Hide()
-                end
-            else
-                b:SetAlpha(0.45)
-                b.icon:SetDesaturated(true)
-                b.timer:Hide()
-                if db.showMissingText and not b.buff.isSeal then
-                    local label = NS.L[b.buff.labelKey] or NS.SpellName(b.buff.spellIDs[1])
-                    if b.buff.groupKey then
-                        local groupKey = b.buff.groupKey
-                        if groupPresent[groupKey] or groupAlertShown[groupKey] then
-                            b.missing:Hide()
-                        else
-                            b.missing:SetText(NS.L[groupLabelKeys[groupKey]] or label)
-                            b.missing:Show()
-                            groupAlertShown[groupKey] = true
-                        end
-                    else
-                        b.missing:SetText(label .. " " .. (NS.L.MISSING or "missing"))
-                    end
-                    if not b.buff.groupKey then b.missing:Show() end
-                else
-                    b.missing:Hide()
-                end
-            end
-        end
-    end
-    end
-    UpdateGroup(icons)
-    UpdateExpiryAlert(InCombatLockdown and InCombatLockdown() or false)
+    Guarded("seal update", UpdateSealStates)
+    Guarded("buff update", UpdateBuffStates)
+    Guarded("aura update", UpdatePaladinAura)
+    Render()
 end
 
 function NS.Refresh()
-    if InCombatLockdown and InCombatLockdown() then
+    if InCombat() then
         refreshPending = true
         UpdateManaBar()
         UpdateBagSlots()
@@ -715,8 +831,8 @@ function NS.CreateTrackerFrame()
     end)
     NS.BagSlotsButton = bagSlotsButton
 
-    local elapsed = 0
-    local sealTimerElapsed = 0
+    local pollElapsed = 0
+    local renderElapsed = 0
     frame:SetScript("OnUpdate", function(_, dt)
         local db = NS.GetDB and NS.GetDB()
         local canMove = db and not db.locked and not (InCombatLockdown and InCombatLockdown())
@@ -731,15 +847,16 @@ function NS.CreateTrackerFrame()
             warningFlashElapsed = warningFlashElapsed - 0.4
             warningFlashOn = not warningFlashOn
         end
-        elapsed = elapsed + dt
-        if elapsed >= 0.5 then
-            elapsed = 0
+        pollElapsed = pollElapsed + dt
+        if pollElapsed >= 0.5 then
+            pollElapsed = 0
+            renderElapsed = 0
             Update()
         end
-        sealTimerElapsed = sealTimerElapsed + dt
-        if sealTimerElapsed >= 0.2 then
-            sealTimerElapsed = 0
-            RenderSealStatus()
+        renderElapsed = renderElapsed + dt
+        if renderElapsed >= 0.2 then
+            renderElapsed = 0
+            Render()
         end
     end)
 
@@ -802,9 +919,9 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     if event == "UNIT_POWER_UPDATE" or event == "UNIT_MAXPOWER" then
         if unit == "player" then UpdateManaBar() end
     elseif event == "UNIT_SPELLCAST_SUCCEEDED" and unit == "player" then
-        ResetSealTimerAfterCast(...)
+        Guarded("seal cast", ResetSealTimerAfterCast, ...)
     elseif event == "UNIT_AURA" and unit == "player" then
-        if not InCombatLockdown() then Rebuild() end
+        Rebuild()
         Update()
         UpdateManaBar()
     elseif event == "UNIT_INVENTORY_CHANGED" and unit == "player" then

@@ -1,5 +1,18 @@
 # MultiTool
 
+## [v1.0.13](https://github.com/Henrakk/addon-wow-henrak-multi-tool/tree/v1.0.13) (2026-10-02)
+[Full Changelog](https://github.com/Henrakk/addon-wow-henrak-multi-tool/compare/v1.0.12...v1.0.13) 
+
+- v1.0.13: rework buff and seal display in and out of combat  
+    - Fix the seal countdown not showing (e.g. Seal of Fury): seal casts are matched by spell ID again as well as by name, and every seal now has its own countdown driven by its own aura, so two active seals no longer share (or lose) a single chrono.  
+    - Fix a recast being overwritten by the old aura expiration before the server refreshes it: the countdown restarts at once and the aura only takes over when it really expires later (bounded by a short grace window).  
+    - Fix regular buffs (e.g. Blessing of Wisdom) not updating in combat, without touching protected frames in combat: showing/resizing the tracker frames now only happens out of combat, while icons, timers and missing texts refresh live.  
+    - A seal cast in combat now updates the seal icon and its chrono immediately instead of waiting for the end of combat.  
+    - Aura fields are only read when the client allows it; when aura data is hidden in combat the last known state is kept and timers keep counting down instead of raising errors.  
+    - One failing component can no longer freeze the whole tracker: errors are reported once in chat instead of repeating.  
+    - Add `/mtool seal`, a diagnostic that lists every seal (known, active, spell IDs), the live countdowns and all current player buffs with their spell IDs.  
+    Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>  
+
 ## [v1.0.12](https://github.com/Henrakk/addon-wow-henrak-multi-tool/tree/v1.0.12) (2026-10-02)
 [Full Changelog](https://github.com/Henrakk/addon-wow-henrak-multi-tool/compare/v1.0.11...v1.0.12) 
 

@@ -274,6 +274,38 @@ function NS.SpellName(spellID)
     return tostring(spellID)
 end
 
+-- In combat, some clients return "secret" values that addons may not compare,
+-- index or do arithmetic on. Every read of aura fields goes through CanRead.
+function NS.CanRead(value)
+    if value == nil or not canaccessvalue then return true end
+    local ok, result = pcall(canaccessvalue, value)
+    return ok and result and true or false
+end
+
+-- Returns readable, duration, expirationTime. `readable` is false when the
+-- fields cannot be read (secret values); duration/expirationTime are nil for
+-- auras that have no expiration.
+function NS.GetAuraTiming(aura)
+    if not aura then return false end
+    local duration, expirationTime = aura.duration, aura.expirationTime
+    if not NS.CanRead(duration) or not NS.CanRead(expirationTime) then return false end
+    if type(duration) ~= "number" or type(expirationTime) ~= "number"
+        or duration <= 0 or expirationTime <= 0 then
+        return true, nil, nil
+    end
+    return true, duration, expirationTime
+end
+
+-- False when the first player aura cannot be read, i.e. aura data is
+-- currently hidden from addons and presence checks would be unreliable.
+function NS.AuraDataReadable()
+    if not (C_UnitAuras and C_UnitAuras.GetAuraDataByIndex) then return true end
+    local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, "player", 1, "HELPFUL")
+    if not ok then return false end
+    if not aura then return true end
+    return not canaccessvalue or (canaccessvalue(aura.name) and canaccessvalue(aura.spellId or aura.spellID))
+end
+
 function NS.HasBuff(buff)
     local wanted = {}
     local wantedNames = {}
@@ -291,33 +323,28 @@ function NS.HasBuff(buff)
         end
     end
 
-    if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
-        for i = 1, 64 do
-            local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
-            if not ok then return false end
-            if not aura then break end
-            local spellID = aura.spellId or aura.spellID
-            local canReadSpellID = spellID and (not canaccessvalue or canaccessvalue(spellID))
-            if spellID and canReadSpellID and wanted[spellID] then
-                return true, aura
-            end
-            if aura.name and wantedNames[aura.name] then
-                return true, aura
-            end
+    local function MatchesWanted(aura)
+        local spellID = aura.spellId or aura.spellID
+        if spellID and (not canaccessvalue or canaccessvalue(spellID)) and wanted[spellID] then
+            return true
         end
-    elseif C_UnitAuras and C_UnitAuras.GetBuffDataByIndex then
+        local name = aura.name
+        return name ~= nil and (not canaccessvalue or canaccessvalue(name)) and wantedNames[name] == true
+    end
+
+    local byIndex = C_UnitAuras and (C_UnitAuras.GetAuraDataByIndex or C_UnitAuras.GetBuffDataByIndex)
+    if byIndex then
+        local isAuraIndex = C_UnitAuras.GetAuraDataByIndex ~= nil
         for i = 1, 64 do
-            local ok, aura = pcall(C_UnitAuras.GetBuffDataByIndex, "player", i)
+            local ok, aura
+            if isAuraIndex then
+                ok, aura = pcall(byIndex, "player", i, "HELPFUL")
+            else
+                ok, aura = pcall(byIndex, "player", i)
+            end
             if not ok then return false end
             if not aura then break end
-            local spellID = aura.spellId or aura.spellID
-            local canReadSpellID = spellID and (not canaccessvalue or canaccessvalue(spellID))
-            if spellID and canReadSpellID and wanted[spellID] then
-                return true, aura
-            end
-            if aura.name and wantedNames[aura.name] then
-                return true, aura
-            end
+            if MatchesWanted(aura) then return true, aura end
         end
     elseif UnitAura then
         for i = 1, 64 do
